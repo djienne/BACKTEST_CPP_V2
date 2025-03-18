@@ -1,4 +1,4 @@
-# Trading Strategy Backtester
+# Trading Strategy Backtester C++
 
 ## Purpose
 A high-performance backtesting framework for running fast and memory-efficient backtests on various trading strategies (EMA crossover, SuperTrend, Bollinger Bands, etc.).
