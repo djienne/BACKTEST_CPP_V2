@@ -3,7 +3,9 @@
 ## Purpose
 A high-performance backtesting framework for running fast and memory-efficient backtests on various trading strategies (EMA crossover, SuperTrend, Bollinger Bands, etc.).
 
-**Note:** Strategies with `F_` prefix are designed for futures markets, while those without the prefix are for spot markets.
+**Notes:** 
+- Strategies with `F_` prefix are designed for futures markets, while those without the prefix are for spot markets.
+- Uses `float` (32-bit) variables instead of `double` (64-bit), most of the time, that goes about 4 times faster and uses 4 times less memory for equivalent results.
 
 ## Features
 - Leverages TA-lib (Technical Analysis Library) for technical indicators
