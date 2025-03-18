@@ -87,7 +87,7 @@ After compilation, execute a strategy backtest:
 ```
 
 ## Data Format
-Data is provided in the `data` directory for BTC and ETH across several timeframes.
+Data is provided in the `data` directory for BTC and ETH 1h data.
 
 If you want more data you can see on the folder `data_downloader_freqtrade` a project to download data with Freqtrade and Docker as `.json` format (See `README.md` inside).
 
