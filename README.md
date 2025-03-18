@@ -1,26 +1,120 @@
-*  ***Purpore : run fast and memory effective backtests on trading strategies*** (EMA crossover, supertrends, etc...).
-* Technical indicators are provided by TA-lib (Technical Analysis Library)
-* The provided strategies to-be-optimized are (so far):
-    * `backtest_double_EMA_float.cpp` : finds the two best EMA values for a basic 2-EMA cross-over strategy
-    * `backtest_double_EMA_StochRSI_float.cpp` : finds the two best EMA values for a 2-EMA cross-over strategy with Stochastic RSI check (buying if overbought, selling if oversold; was found to be better
-    * `backtest_TRIX.cpp` : finds the best EMA value and TRIX Length and Signal values for a TRIX strategy (Crypto Robot inspired)
-    * `backtest_TRIX_multi_pair.cpp` : same as above but with a strategy using 4 coins (BTC ETH BNB XRP) and 4 open positions maximum
-    * and a few other strategies...
-* use it like a boiler plate code in order to test other strategies and/or parameter space.
-* data is provided in `data` for Binance top 30 coins, several timeframes. If other data is wanted, the user must update it manually and follow the same format: `unix-timestamp(ms);open;high;low;close;volume` (no header).
-* A python version of `backtest_double_EMA_StochRSI_float` is provided in the `python` folder for sanity check and performance comparison.
+# Trading Strategy Backtester
 
-**How to compile and run**
-*  Instructions for Linux/Ubuntu (if Windows, you can use Virtual Box that is free)
-*  Have a C/C++ compiler installed (recommended g++ and gcc)
-*  Compiling TA-lib (Technical Analysis Library):
-   *  open terminal in folder `talib` and run `./configure --prefix=/$(pwd)/talib_install/` then  `make`  then  `make install` and then  `make clean` 
-* open a terminal in the root folder (=${fileDirname}) (containing `backtest_*.cpp`), and run `make`
-* execute the backtest with `./backtest_double_EMA_float.exe` (or other `.exe` for other strategies) in the root folder
-* alternatively, run `sh install.sh` in the root folder.
-* **alternatively, use the docker-compose project in `docker_easy` (See `README.md` inside)**
+## Purpose
+A high-performance backtesting framework for running fast and memory-efficient backtests on various trading strategies (EMA crossover, SuperTrend, Bollinger Bands, etc.).
 
-**Example results:** (2-EMA cross simple strategy)
+**Note:** Strategies with `F_` prefix are designed for futures markets, while those without the prefix are for spot markets.
+
+## Features
+- Leverages TA-lib (Technical Analysis Library) for technical indicators
+- Extremely fast performance compared to Python implementations (~3000x faster)
+- Low memory footprint
+- Supports multiple trading pairs
+- Includes built-in statistics for strategy evaluation (win rate, drawdown, Calmar ratio, etc.)
+- Can be used as boilerplate code to test custom strategies
+
+## Available Strategies
+
+### EMA-Based Strategies
+- `backtest_double_EMA_float.cpp`: Basic 2-EMA crossover strategy optimizer
+- `backtest_double_EMA_StochRSI_float.cpp`: 2-EMA crossover with Stochastic RSI filter
+- `backtest_double_EMA_StochRSI_float_muti_pair.cpp`: Multi-pair version of EMA with StochRSI strategy
+
+### Multiple Indicator Strategies
+- `BigWill.cpp`: Spot market strategy using Williams %R, EMAs, and Awesome Oscillator
+- `F_BigWill.cpp`: Futures trading strategy combining Awesome Oscillator, Williams %R, and EMA crossovers
+- `3EMA_SRSI_ATR.cpp`: Spot market strategy using triple EMA, Stochastic RSI, and ATR
+- `F_3EMA_SRSI_ATR.cpp`: Futures trading strategy with three EMAs, Stochastic RSI, and dynamic ATR-based exit levels
+
+### TRIX-Based Strategies
+- `backtest_TRIX.cpp`: Optimizer for TRIX indicator strategies (inspired by Crypto Robot)
+- `backtest_TRIX_multi_pair.cpp`: Multi-pair TRIX strategy (BTC, ETH, BNB, XRP) with position management
+
+### Bollinger Bands Strategies
+- `BBTREND.cpp`: Spot market strategy using Bollinger Bands breakouts
+- `F_BBTREND.cpp`: Futures trading strategy for trend breakouts with Bollinger Bands and EMA filter
+
+### SuperTrend Strategies
+- `SuperTrend_EMA_ATR.cpp`: Combines SuperTrend indicator with EMA and ATR-based position management
+- `SuperReversal_mtf.cpp`: Spot market multi-timeframe strategy using SuperTrend and EMAs
+- `F_SuperReversal_mtf.cpp`: Futures multi-timeframe strategy with SuperTrend and EMA crossovers
+
+## Installation
+
+### Required Packages (Ubuntu/Debian)
+```bash
+sudo apt-get update
+sudo apt-get install -y build-essential libjsoncpp-dev nlohmann-json3-dev gcc g++
+```
+
+### Setup Options
+
+#### Option 1: Direct installation on Linux/Ubuntu
+1. Install a C/C++ compiler (recommended: g++ and gcc)
+2. Compile TA-lib:
+   ```bash
+   cd talib
+   ./configure --prefix=/$(pwd)/talib_install/
+   make
+   make install
+   make clean
+   ```
+3. Compile the strategies:
+   ```bash
+   cd ..  # return to root folder
+   make
+   ```
+
+#### Option 2: Windows using WSL (Windows Subsystem for Linux)
+1. Install WSL (Windows Subsystem for Linux) on your Windows machine
+2. Follow the Linux/Ubuntu instructions above within your WSL environment
+
+#### Using the install script should work too
+```bash
+sh install.sh
+```
+
+#### Option 3: Docker
+Use the docker-compose project in the `docker_easy` directory (see `README.md` inside for details).
+
+## Running Backtests
+
+After compilation, execute a strategy backtest:
+```bash
+./backtest_double_EMA_float.exe  # or any other compiled strategy
+```
+
+## Data Format
+Data is provided in the `data` directory for the top 30 Binance coins across several timeframes.
+
+If you want more data you can see on the folder `data_downloader_freqtrade` a project to download data with Freqtrade and Docker as `.json` format (See `README.md` inside).
+
+## Performance Comparison
+
+C++ vs Python implementation of `backtest_double_EMA_StochRSI_float`:
+
+```
+C++ Implementation:
+-------------------------------------
+Number of backtests performed : 9120
+Time taken                    : 2 seconds 
+RAM usage                     : 14.3 MB
+-------------------------------------
+
+Python Implementation:
+-------------------------------------
+Number of backtests performed :  9120
+Time taken                    :  5955 seconds 
+RAM usage                     :  86.0 MB
+-------------------------------------
+
+The C++ code is ~3000 times faster than the Python version.
+```
+
+## Example Results
+
+Sample output from 2-EMA crossover strategy:
+
 ```
 -------------------------------------
 Strategy to test: 2-EMA crossover simple
@@ -51,56 +145,4 @@ Number of backtests performed : 39402
 Time taken                    : 14 seconds 
 RAM usage                     : 43.6 MB
 -------------------------------------
--------------------------------------
--------------------------------------
--------------------------------------
-Strategy to test: 2-EMA crossover simple
-DATA FILE TO PROCESS: ./data/BTCUSDT_1HOUR.txt
-Initialized TA-Lib !
-Initialized calculations.
--------------------------------------
-Begin day      : 2017/8/17
-End day        : 2022/7/6
-OPEN/CLOSE FEE : 0.05 %
-FUNDING FEE    : 0.01 %
-LEVERAGE       : 1
-Minimum number of trades required: 100
-CAN LONG : 1 ; CAN SHORT : 1
--------------------------------------
-BEST PARAMETER SET FOUND: 
--------------------------------------
-Strategy : 2-EMA crossover simple
-EMA      : 72 7
-Best Gain: 2829.81%
-Win rate : 27.1058%
-max DD   : -40.7833%
-Gain/DDC : 41.0884
-Score    : 1113.74
-Number of trades: 926
--------------------------------------
-Number of backtests performed : 39402
-Time taken                    : 11 seconds 
-RAM usage                     : 43.5 MB
--------------------------------------
 ```
-
-Performance comparison (naive) Python versus C++ :
-
-```
-C++ : backtest_double_EMA_StochRSI_float.exe
--------------------------------------
-Number of backtests performed : 9120
-Time taken                    : 2 seconds 
-RAM usage                     : 14.3 MB
--------------------------------------
-
-Python : backtest_double_EMA_StochRSI_float.py
--------------------------------------
-Number of backtests performed :  9120
-Time taken                    :  5955  seconds 
-RAM usage                     :  86.0  MB
--------------------------------------
-
-The C++ code is ~3000 times faster than the (naive) python.
-```
-
