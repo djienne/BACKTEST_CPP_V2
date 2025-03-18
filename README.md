@@ -55,6 +55,7 @@ sudo apt-get install -y build-essential libjsoncpp-dev nlohmann-json3-dev gcc g+
 1. Install a C/C++ compiler (recommended: g++ and gcc)
 2. Compile TA-lib:
    ```bash
+   unzip talib.zip
    cd talib
    ./configure --prefix=/$(pwd)/talib_install/
    make
@@ -87,9 +88,9 @@ After compilation, execute a strategy backtest:
 ```
 
 ## Data Format
-Data is provided in the `data` directory for BTC and ETH 1h data.
+Data is provided in the `data` directory for several pairs and timeframes (outdated) for tests.
 
-If you want more data you can see on the folder `data_downloader_freqtrade` a project to download data with Freqtrade and Docker as `.json` format (See `README.md` inside).
+If you want more up-to-date data you can see on the folder `data_downloader_freqtrade` a project to download data with Freqtrade and Docker as `.json` format (See `README.md` inside).
 
 ## Performance Comparison
 
