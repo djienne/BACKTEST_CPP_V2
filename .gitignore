@@ -1,0 +1,7 @@
+*.exe
+*_best.txt
+baseline_*.txt
+after_*.txt
+regen_*.txt
+.regression_tmp/
+talib/

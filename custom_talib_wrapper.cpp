@@ -1,247 +1,127 @@
 #include "custom_talib_wrapper.hh"
 using namespace std;
+
+namespace
+{
+using SingleInputTalibFn = TA_RetCode (*)(int, int, const float *, int, TA_Integer *, TA_Integer *, TA_Real *);
+using OhlcInputTalibFn = TA_RetCode (*)(int, int, const float *, const float *, const float *, int, TA_Integer *, TA_Integer *, TA_Real *);
+
+std::vector<float> build_talib_output(const size_t input_size, const TA_Integer outBeg, const TA_Integer outNbElement, const std::vector<TA_Real> &raw_output, const char *indicator_name)
+{
+    std::vector<float> output(input_size, 0.0f);
+    for (TA_Integer ii = 0; ii < outNbElement; ++ii)
+    {
+        output[static_cast<size_t>(outBeg + ii)] = raw_output[static_cast<size_t>(ii)];
+    }
+
+    if (output.size() != input_size)
+    {
+        std::cout << "error in " << indicator_name << std::endl;
+        std::abort();
+    }
+
+    return output;
+}
+
+std::vector<float> run_single_input_indicator(const std::vector<float> &vals, const int period, SingleInputTalibFn indicator, const char *indicator_name)
+{
+    if (vals.empty())
+    {
+        return {};
+    }
+
+    TA_Integer outBeg = 0;
+    TA_Integer outNbElement = 0;
+    std::vector<TA_Real> raw_output(vals.size(), 0.0f);
+
+    const TA_RetCode retCode = indicator(0, static_cast<int>(vals.size()) - 1,
+                                         vals.data(),
+                                         period,
+                                         &outBeg,
+                                         &outNbElement,
+                                         raw_output.data());
+
+    if (retCode != TA_SUCCESS)
+    {
+        std::cout << "error in " << indicator_name << std::endl;
+        std::abort();
+    }
+
+    return build_talib_output(vals.size(), outBeg, outNbElement, raw_output, indicator_name);
+}
+
+std::vector<float> run_ohlc_indicator(const std::vector<float> &high, const std::vector<float> &low, const std::vector<float> &close, const int period, OhlcInputTalibFn indicator, const char *indicator_name)
+{
+    if (close.empty())
+    {
+        return {};
+    }
+
+    TA_Integer outBeg = 0;
+    TA_Integer outNbElement = 0;
+    std::vector<TA_Real> raw_output(close.size(), 0.0f);
+
+    const TA_RetCode retCode = indicator(0, static_cast<int>(close.size()) - 1,
+                                         high.data(), low.data(), close.data(),
+                                         period,
+                                         &outBeg,
+                                         &outNbElement,
+                                         raw_output.data());
+
+    if (retCode != TA_SUCCESS)
+    {
+        std::cout << "error in " << indicator_name << std::endl;
+        std::abort();
+    }
+
+    const std::vector<float> output = build_talib_output(close.size(), outBeg, outNbElement, raw_output, indicator_name);
+    if (output.size() != high.size() || output.size() != low.size() || output.size() != close.size())
+    {
+        std::cout << "error in " << indicator_name << std::endl;
+        std::cout << output.size() << " " << low.size() << " " << close.size() << " " << high.size() << std::endl;
+        std::abort();
+    }
+
+    return output;
+}
+} // namespace
 //////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 
 std::vector<float> TALIB_MIN(const std::vector<float> &vals, const int period)
 {
-    std::vector<float> OUT;
-    OUT.reserve(vals.size());
-
-    TA_Integer outBeg;
-    TA_Integer outNbElement;
-    TA_RetCode retCode;
-    TA_Real out_val[vals.size()];
-
-    int min_idx = 0;
-    int max_idx = vals.size() - 1;
-
-    retCode = TA_S_MIN(min_idx, max_idx,
-                       &vals[0],
-                       period,
-                       &outBeg,
-                       &outNbElement,
-                       &out_val[0]);
-
-    for (int ii = 0; ii < outBeg; ii++)
-    {
-        OUT.push_back(0.0);
-    }
-
-    for (int ii = 0; ii < outNbElement; ii++)
-    {
-        OUT.push_back(out_val[ii]);
-    }
-
-    if (OUT.size() != vals.size())
-    {
-        std::cout << "error in TALIB_MIN" << std::endl;
-        std::abort();
-    }
-
-    return OUT;
+    return run_single_input_indicator(vals, period, TA_S_MIN, "TALIB_MIN");
 }
 
 //////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 
 std::vector<float> TALIB_MAX(const std::vector<float> &vals, const int period)
 {
-    std::vector<float> OUT;
-    OUT.reserve(vals.size());
-
-    TA_Integer outBeg;
-    TA_Integer outNbElement;
-    TA_RetCode retCode;
-    TA_Real out_val[vals.size()];
-
-    int min_idx = 0;
-    int max_idx = vals.size() - 1;
-
-    retCode = TA_S_MAX(min_idx, max_idx,
-                       &vals[0],
-                       period,
-                       &outBeg,
-                       &outNbElement,
-                       &out_val[0]);
-
-    for (int ii = 0; ii < outBeg; ii++)
-    {
-        OUT.push_back(0.0);
-    }
-
-    for (int ii = 0; ii < outNbElement; ii++)
-    {
-        OUT.push_back(out_val[ii]);
-    }
-
-    if (OUT.size() != vals.size())
-    {
-        std::cout << "error in TALIB_MAX" << std::endl;
-        std::abort();
-    }
-
-    return OUT;
+    return run_single_input_indicator(vals, period, TA_S_MAX, "TALIB_MAX");
 }
 
 //////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 
 std::vector<float> TALIB_RSI(const std::vector<float> &vals, const int period)
 {
-    std::vector<float> OUT;
-    OUT.reserve(vals.size());
-
-    TA_Integer outBeg;
-    TA_Integer outNbElement;
-    TA_RetCode retCode;
-    TA_Real out_val[vals.size()];
-
-    int min_idx = 0;
-    int max_idx = vals.size() - 1;
-
-    retCode = TA_S_RSI(min_idx, max_idx,
-                       &vals[0],
-                       period,
-                       &outBeg,
-                       &outNbElement,
-                       &out_val[0]);
-
-    for (int ii = 0; ii < outBeg; ii++)
-    {
-        OUT.push_back(0.0);
-    }
-
-    for (int ii = 0; ii < outNbElement; ii++)
-    {
-        OUT.push_back(out_val[ii]);
-    }
-
-    if (OUT.size() != vals.size())
-    {
-        std::cout << "error in TALIB_RSI" << std::endl;
-        std::abort();
-    }
-
-    return OUT;
+    return run_single_input_indicator(vals, period, TA_S_RSI, "TALIB_RSI");
 }
 
 //////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 
 std::vector<float> TALIB_EMA(const std::vector<float> &vals, const int period)
 {
-    std::vector<float> OUT;
-    OUT.reserve(vals.size());
-
-    TA_Integer outBeg;
-    TA_Integer outNbElement;
-    TA_RetCode retCode;
-    TA_Real out_val[vals.size()];
-
-    int min_idx = 0;
-    int max_idx = vals.size() - 1;
-
-    retCode = TA_S_EMA(min_idx, max_idx,
-                       &vals[0],
-                       period,
-                       &outBeg,
-                       &outNbElement,
-                       &out_val[0]);
-
-    for (int ii = 0; ii < outBeg; ii++)
-    {
-        OUT.push_back(0.0);
-    }
-
-    for (int ii = 0; ii < outNbElement; ii++)
-    {
-        OUT.push_back(out_val[ii]);
-    }
-
-    if (OUT.size() != vals.size())
-    {
-        std::cout << "error in TALIB_EMA" << std::endl;
-        std::abort();
-    }
-
-    return OUT;
+    return run_single_input_indicator(vals, period, TA_S_EMA, "TALIB_EMA");
 }
 //////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 
 std::vector<float> TALIB_SMA(const std::vector<float> &vals, const int period)
 {
-    std::vector<float> OUT;
-    OUT.reserve(vals.size());
-
-    TA_Integer outBeg;
-    TA_Integer outNbElement;
-    TA_RetCode retCode;
-    TA_Real out_val[vals.size()];
-
-    int min_idx = 0;
-    int max_idx = vals.size() - 1;
-
-    retCode = TA_S_SMA(min_idx, max_idx,
-                       &vals[0],
-                       period,
-                       &outBeg,
-                       &outNbElement,
-                       &out_val[0]);
-
-    for (int ii = 0; ii < outBeg; ii++)
-    {
-        OUT.push_back(0.0);
-    }
-
-    for (int ii = 0; ii < outNbElement; ii++)
-    {
-        OUT.push_back(out_val[ii]);
-    }
-
-    if (OUT.size() != vals.size())
-    {
-        std::cout << "error in TALIB_SMA" << std::endl;
-        std::abort();
-    }
-
-    return OUT;
+    return run_single_input_indicator(vals, period, TA_S_SMA, "TALIB_SMA");
 }
 //////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 std::vector<float> TALIB_ATR(const std::vector<float> &high, const std::vector<float> &low, const std::vector<float> &close, const int period)
 {
-    std::vector<float> OUT{};
-    OUT.reserve(close.size());
-
-    TA_Integer outBeg;
-    TA_Integer outNbElement;
-    TA_RetCode retCode;
-    TA_Real out_val[close.size()];
-
-    int min_idx = 0;
-    int max_idx = close.size() - 1;
-
-    retCode = TA_S_ATR(min_idx, max_idx,
-                       &high[0], &low[0], &close[0],
-                       period,
-                       &outBeg,
-                       &outNbElement,
-                       &out_val[0]);
-
-    for (int ii = 0; ii < outBeg; ii++)
-    {
-        OUT.push_back(0.0);
-    }
-
-    for (int ii = 0; ii < outNbElement; ii++)
-    {
-        OUT.push_back(out_val[ii]);
-    }
-
-    if (OUT.size() != high.size() || OUT.size() != low.size() || OUT.size() != close.size())
-    {
-        std::cout << "error in TALIB_ATR" << std::endl;
-        std::cout << OUT.size() << " " << low.size() << " " << close.size() << " " << high.size() << std::endl;
-        std::abort();
-    }
-
-    return OUT;
+    return run_ohlc_indicator(high, low, close, period, TA_S_ATR, "TALIB_ATR");
 }
 //////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 std::vector<float> TALIB_STOCHRSI_not_averaged(const std::vector<float> &vals, const int nb_period_stoch, const int nb_period_rsi)
@@ -259,7 +139,7 @@ std::vector<float> TALIB_STOCHRSI_not_averaged(const std::vector<float> &vals, c
     for (uint i = 0; i < rsi.size(); i++)
     {
         float val = (rsi[i] - lowest_rsi[i]) / (highest_rsi[i] - lowest_rsi[i]);
-        if (std::isnan(val) | std::isinf(val))
+        if (std::isnan(val) || std::isinf(val))
         {
             val = 0.0;
         }
@@ -284,7 +164,7 @@ std::vector<float> TALIB_STOCHRSI_K(const std::vector<float> &vals, const int nb
     for (uint i = 0; i < rsi.size(); i++)
     {
         float val = (rsi[i] - lowest_rsi[i]) / (highest_rsi[i] - lowest_rsi[i]);
-        if (std::isnan(val) | std::isinf(val))
+        if (std::isnan(val) || std::isinf(val))
         {
             val = 0.0;
         }
@@ -310,7 +190,7 @@ std::vector<float> TALIB_STOCHRSI_D(const std::vector<float> &vals, const int nb
     for (uint i = 0; i < rsi.size(); i++)
     {
         float val = (rsi[i] - lowest_rsi[i]) / (highest_rsi[i] - lowest_rsi[i]);
-        if (std::isnan(val) | std::isinf(val))
+        if (std::isnan(val) || std::isinf(val))
         {
             val = 0.0;
         }
@@ -340,7 +220,7 @@ std::vector<float> TALIB_TRIX(const std::vector<float> &vals, const int trixLeng
     for (uint i = 1; i < TRIX.size(); i++)
     {
         float val = (TRIX[i] - TRIX[i - 1]) / TRIX[i - 1] * 100.0;
-        if (std::isinf(val) | std::isnan(val))
+        if (std::isinf(val) || std::isnan(val))
         {
             val = 0.0;
         }
@@ -525,16 +405,6 @@ std::vector<float> TALIB_SuperTrend_dir_only(const std::vector<float> &high, con
 
 //////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 
-void swap(int *first, int *second)
-{
-    int temp;
-    temp = *first;
-    *first = *second;
-    *second = temp;
-}
-
-//////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
-
 std::vector<float> TALIB_AO(const std::vector<float> &high, const std::vector<float> &low,
                             const int fast, const int slow)
 {
@@ -542,7 +412,7 @@ std::vector<float> TALIB_AO(const std::vector<float> &high, const std::vector<fl
     int sloww = slow;
     if (sloww < fastt)
     {
-        swap(&fastt, &sloww);
+        std::swap(fastt, sloww);
     }
 
     const uint m = high.size();
@@ -573,41 +443,7 @@ std::vector<float> TALIB_AO(const std::vector<float> &high, const std::vector<fl
 std::vector<float> TALIB_WILLR(const std::vector<float> &high, const std::vector<float> &low, const std::vector<float> &close,
                                const int length)
 {
-    std::vector<float> OUT{};
-    OUT.reserve(close.size());
-
-    TA_Integer outBeg;
-    TA_Integer outNbElement;
-    TA_RetCode retCode;
-    TA_Real out_val[close.size()];
-
-    int min_idx = 0;
-    int max_idx = close.size() - 1;
-
-    retCode = TA_S_WILLR(min_idx, max_idx,
-                         &high[0], &low[0], &close[0],
-                         length,
-                         &outBeg,
-                         &outNbElement,
-                         &out_val[0]);
-
-    for (int ii = 0; ii < outBeg; ii++)
-    {
-        OUT.push_back(0.0);
-    }
-
-    for (int ii = 0; ii < outNbElement; ii++)
-    {
-        OUT.push_back(out_val[ii]);
-    }
-
-    if (OUT.size() != high.size() || OUT.size() != low.size() || OUT.size() != close.size())
-    {
-        std::cout << "error in TALIB_WILLR" << std::endl;
-        std::abort();
-    }
-
-    return OUT;
+    return run_ohlc_indicator(high, low, close, length, TA_S_WILLR, "TALIB_WILLR");
 }
 
 //////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
@@ -615,56 +451,42 @@ void TALIB_BBANDS(const std::vector<float> &close,
                   const float &optInNbDevUp, const float &optInNbDevDn, const int &length,
                   std::vector<float> &OUT_u, std::vector<float> &OUT_m, std::vector<float> &OUT_l)
 {
-    // std::vector<float> OUT_u;
-    // std::vector<float> OUT_l;
-    // std::vector<float> OUT_m;
-
-    OUT_u.reserve(close.size());
-    OUT_m.reserve(close.size());
-    OUT_l.reserve(close.size());
-
-    OUT_u = {};
-    OUT_m = {};
-    OUT_l = {};
-
-    TA_Integer outBeg;
-    TA_Integer outNbElement;
-    TA_RetCode retCode;
-    TA_Real upperB[close.size()];
-    TA_Real middleB[close.size()];
-    TA_Real lowerB[close.size()];
-
-    int min_idx = 0;
-    int max_idx = close.size() - 1;
-
-    retCode = TA_S_BBANDS(min_idx, max_idx,
-                          &close[0], length,
-                          optInNbDevUp, optInNbDevUp, TA_MAType_SMA,
-                          &outBeg,
-                          &outNbElement,
-                          &upperB[0], &middleB[0], &lowerB[0]);
-
-    for (int ii = 0; ii < outBeg; ii++)
+    if (close.empty())
     {
-        OUT_u.push_back(0.0);
-        OUT_m.push_back(0.0);
-        OUT_l.push_back(0.0);
+        OUT_u.clear();
+        OUT_m.clear();
+        OUT_l.clear();
+        return;
     }
 
-    for (int ii = 0; ii < outNbElement; ii++)
-    {
-        OUT_u.push_back(upperB[ii]);
-        OUT_m.push_back(middleB[ii]);
-        OUT_l.push_back(lowerB[ii]);
-    }
+    TA_Integer outBeg = 0;
+    TA_Integer outNbElement = 0;
+    std::vector<TA_Real> upper_band(close.size(), 0.0f);
+    std::vector<TA_Real> middle_band(close.size(), 0.0f);
+    std::vector<TA_Real> lower_band(close.size(), 0.0f);
 
-    if (OUT_u.size() != close.size() | OUT_m.size() != close.size() | OUT_l.size() != close.size())
+    const TA_RetCode retCode = TA_S_BBANDS(0, static_cast<int>(close.size()) - 1,
+                                           close.data(), length,
+                                           optInNbDevUp, optInNbDevDn, TA_MAType_SMA,
+                                           &outBeg,
+                                           &outNbElement,
+                                           upper_band.data(), middle_band.data(), lower_band.data());
+
+    if (retCode != TA_SUCCESS)
     {
         std::cout << "error in TALIB_BBANDS" << std::endl;
         std::abort();
     }
 
-    return;
+    OUT_u = build_talib_output(close.size(), outBeg, outNbElement, upper_band, "TALIB_BBANDS");
+    OUT_m = build_talib_output(close.size(), outBeg, outNbElement, middle_band, "TALIB_BBANDS");
+    OUT_l = build_talib_output(close.size(), outBeg, outNbElement, lower_band, "TALIB_BBANDS");
+
+    if (OUT_u.size() != close.size() || OUT_m.size() != close.size() || OUT_l.size() != close.size())
+    {
+        std::cout << "error in TALIB_BBANDS" << std::endl;
+        std::abort();
+    }
 }
 
 //////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////

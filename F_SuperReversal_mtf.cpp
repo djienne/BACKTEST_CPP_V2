@@ -283,7 +283,7 @@ RUN_RESULTf PROCESS(const vector<KLINEf> &df, const std::vector<fundings> &FUNDI
     const float DDC = (1.0f / (1.0f + max_drawdown / 100.0f) - 1.0f) * 100.0f;
     const float score = gain / DDC * WR;
 
-    result.WALLET_VAL_USDT = USDT_amount;
+    result.WALLET_VAL_USDT = WALLET_VAL_USDT;
     result.gain_over_DDC = gain / DDC;
     result.gain_pc = gain;
     result.max_DD = max_drawdown;

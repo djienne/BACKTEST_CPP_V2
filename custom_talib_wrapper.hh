@@ -59,7 +59,7 @@ std::vector<float> TALIB_WILLR(const std::vector<float> &high, const std::vector
 //////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 void TALIB_BBANDS(const std::vector<float> &close,
                   const float &optInNbDevUp, const float &optInNbDevDn, const int &length,
-                  std::vector<float> &OUT_u, std::vector<float> &OUT_l, std::vector<float> &OUT_m);
+                  std::vector<float> &OUT_u, std::vector<float> &OUT_m, std::vector<float> &OUT_l);
 
 //////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 void RESAMPLE_TIMEFRAME(KLINEf &kline_in_in, KLINEf &kline_out, const int tf_in, const int tf_out);

@@ -33,6 +33,8 @@ struct fundings
 {
     std::vector<long int> timestamp;
     std::vector<float> funding;
+    // Mirrors `timestamp` for fast exact funding lookups during futures backtests.
+    std::unordered_map<long int, float> funding_by_timestamp;
     uint nb;
     std::string name;
 };

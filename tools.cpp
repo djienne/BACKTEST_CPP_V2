@@ -1,5 +1,13 @@
 #include "tools.hh"
 
+namespace
+{
+bool parse_kline_csv_row(const std::string &line, long int &ts, float &op, float &hi, float &lo, float &cl, float &vol)
+{
+    return std::sscanf(line.c_str(), "%ld,%f,%f,%f,%f,%f", &ts, &op, &hi, &lo, &cl, &vol) == 6;
+}
+} // namespace
+
 //////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 
 float find_average(const std::vector<float> &vec)
@@ -461,14 +469,6 @@ bool check_timestamp_consistencies(const std::vector<KLINEf> &PAIRS)
     // index 0 must be BTC (with largest timestamp list with non-zero values of open, high,...)
     for (size_t i = 1; i < PAIRS.size(); i++)
     {
-
-        int nb = PAIRS[i].start_idx - 5;
-
-        if (nb < 0)
-        {
-            nb = 1;
-        }
-
         std::cout << "Checking timestamp consistencies of " << PAIRS[i].name << std::endl;
 
         const bool val = check_if_necessary(PAIRS[0], PAIRS[i]);
@@ -478,7 +478,8 @@ bool check_timestamp_consistencies(const std::vector<KLINEf> &PAIRS)
             is_ok = false;
 
             std::cout << "Timestamps are not consistent" << std::endl;
-            for (size_t j = PAIRS[0].timestamp.size(); j > PAIRS[0].timestamp.size() - 100; j--)
+            const size_t start = PAIRS[0].timestamp.size() > 100 ? PAIRS[0].timestamp.size() - 100 : 0;
+            for (size_t j = start; j < PAIRS[0].timestamp.size(); ++j)
             {
                 std::cout << PAIRS[0].timestamp[j] << " " << PAIRS[i].timestamp[j] << " " << PAIRS[0].timestamp[j] - PAIRS[i].timestamp[j] << std::endl;
             }
@@ -511,48 +512,34 @@ void realign_timestamps(const KLINEf &klines_btc, KLINEf &klines2) // klines2 wi
     std::cout << "Re-aligningment is necessary. Doing it..." << std::endl;
 
     KLINEf output_KLINE = klines_btc;
-
     output_KLINE.name = klines2.name;
+    output_KLINE.start_idx = klines2.start_idx;
+
+    std::unordered_map<long int, uint> timestamp_to_index{};
+    timestamp_to_index.reserve(klines2.nb);
+    for (uint j = 0; j < klines2.nb; ++j)
+    {
+        timestamp_to_index.emplace(klines2.timestamp[j], j);
+    }
 
     for (uint i = klines2.start_idx; i < klines_btc.nb; i++)
     {
-        bool found = false;
-        for (uint j = 0; j < klines2.nb; j++)
-        {
-            if (klines_btc.timestamp[i] == klines2.timestamp[j])
-            {
-                found = true;
-                output_KLINE.open[i] = klines2.open[j];
-                output_KLINE.high[i] = klines2.high[j];
-                output_KLINE.low[i] = klines2.low[j];
-                output_KLINE.close[i] = klines2.close[j];
-            }
-        }
-
-        if (!found)
+        const auto match = timestamp_to_index.find(klines_btc.timestamp[i]);
+        if (match == timestamp_to_index.end())
         {
             std::cout << "Problem with re-aligningment." << std::endl;
             std::abort();
         }
 
-        klines2 = output_KLINE;
+        const uint j = match->second;
+        output_KLINE.open[i] = klines2.open[j];
+        output_KLINE.high[i] = klines2.high[j];
+        output_KLINE.low[i] = klines2.low[j];
+        output_KLINE.close[i] = klines2.close[j];
     }
 
+    klines2 = output_KLINE;
     std::cout << " Done." << std::endl;
-}
-
-//////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
-
-bool key_exists(std::unordered_map<std::string, std::vector<float>> m, const std::string &ch)
-{
-    if (m.find(ch) != m.end())
-    {
-        return true;
-    }
-    else
-    {
-        return false;
-    }
 }
 
 //////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
@@ -663,6 +650,12 @@ KLINEf read_input_data(const std::string &input_file_path)
     KLINEf kline;
 
     std::ifstream myfile(input_file_path);
+    if (!myfile.is_open())
+    {
+        std::cout << "Failed to open data file: " << input_file_path << std::endl;
+        std::abort();
+    }
+
     std::string line;
     long int ts;
     float op, hi, lo, cl, vol;
@@ -670,15 +663,25 @@ KLINEf read_input_data(const std::string &input_file_path)
     int nb_read = 0;
     bool skipped_first = false;
 
-    while (myfile.good())
+    while (std::getline(myfile, line))
     {
-        std::getline(myfile, line);
         if (!skipped_first)
         {
             skipped_first = true;
             continue;
         }
-        std::sscanf(line.c_str(), "%ld,%f,%f,%f,%f,%f", &ts, &op, &hi, &lo, &cl, &vol);
+
+        if (line.empty())
+        {
+            continue;
+        }
+
+        if (!parse_kline_csv_row(line, ts, op, hi, lo, cl, vol))
+        {
+            std::cout << "Malformed CSV row in " << input_file_path << " at data row " << nb_read + 1 << std::endl;
+            std::abort();
+        }
+
         if (previous_ts == ts)
         {
             std::cout << "FOUND DUPLICATE TS at index " << nb_read << "; IGNORING. " << std::endl;
@@ -743,6 +746,11 @@ KLINEf read_input_data_f(const std::string &input_file_path, const std::string &
     std::string jsonStr = readFileToString(input_file_path);
 
     const json jsonData = json::parse(jsonStr);
+    kline.timestamp.reserve(jsonData.size());
+    kline.open.reserve(jsonData.size());
+    kline.high.reserve(jsonData.size());
+    kline.low.reserve(jsonData.size());
+    kline.close.reserve(jsonData.size());
 
     // Iterate over the elements
     for (const auto &item : jsonData)
@@ -803,6 +811,9 @@ fundings read_funding_rates_data(const std::string &input_file_path)
     std::string jsonStr = readFileToString(input_file_path);
 
     const json jsonData = json::parse(jsonStr);
+    FR.timestamp.reserve(jsonData.size());
+    FR.funding.reserve(jsonData.size());
+    FR.funding_by_timestamp.reserve(jsonData.size());
 
     // Iterate over the elements
     for (const auto &item : jsonData)
@@ -818,8 +829,10 @@ fundings read_funding_rates_data(const std::string &input_file_path)
             continue;
         }
         previous_ts = ts;
-        FR.timestamp.push_back(ts / long(1000));
+        const long int timestamp_seconds = ts / long(1000);
+        FR.timestamp.push_back(timestamp_seconds);
         FR.funding.push_back(fu);
+        FR.funding_by_timestamp.emplace(timestamp_seconds, fu);
         nb_read++;
     }
 
@@ -881,19 +894,6 @@ std::vector<float> duplicateElements(const std::vector<float> &inputVector, cons
 
 //////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 
-std::optional<size_t> vectorContainsElement(const fundings &vec, const int &element)
-{
-    const auto it = std::find(vec.timestamp.begin(), vec.timestamp.end(), element);
-    if (it != vec.timestamp.end())
-    {
-        return std::distance(vec.timestamp.begin(), it);
-    }
-    else
-    {
-        return std::nullopt;
-    }
-}
-
 bool isTimestampAtFundingTimes(const int64_t &timestamp)
 {
     // Check if the timestamp falls within the desired times
@@ -913,16 +913,13 @@ float get_funding_fee_if_any(const fundings &FUND, const int &current_timestamp)
         return 0.0f;
     }
 
-    const auto index = vectorContainsElement(FUND, current_timestamp);
+    const auto match = FUND.funding_by_timestamp.find(current_timestamp);
+    if (match != FUND.funding_by_timestamp.end())
+    {
+        return match->second;
+    }
 
-    if (index.has_value())
-    {
-        return FUND.funding[index.value()];
-    }
-    else
-    {
-        return 0.0f;
-    }
+    return 0.0f;
 }
 
 //////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////

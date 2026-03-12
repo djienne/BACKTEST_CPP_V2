@@ -243,7 +243,7 @@ RUN_RESULTf PROCESS(const vector<KLINEf> &PAIRS, const int ema_v, const int trix
     result.param_str = "\n  EMA: " + std::to_string(ema_v) + " ; trixLength: " + std::to_string(trixLength_v) + " ; trixSignal: " + std::to_string(trixSignal_v) +
                        "\n  STOCH_RSI_LOWER: " + std::to_string(STOCH_RSI_LOWER) + " ; STOCH_RSI_UPPER: " + std::to_string(STOCH_RSI_UPPER);
 
-    result.WALLET_VAL_USDT = USDT_amount;
+    result.WALLET_VAL_USDT = WALLET_VAL_USDT;
     result.gain_over_DDC = gain / DDC;
     result.gain_pc = gain;
     result.max_DD = max_drawdown;

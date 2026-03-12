@@ -86,11 +86,22 @@ void INITIALIZE_DATA0(const KLINEf &kline)
               << std::endl;
 
     std::vector<int> list_ema = {};
+    EMA_LISTS.clear();
+    year.clear();
+    hour.clear();
+    month.clear();
+    day.clear();
+    year.reserve(kline.nb);
+    hour.reserve(kline.nb);
+    month.reserve(kline.nb);
+    day.reserve(kline.nb);
 
     for (int i = MIN_EMA; i <= range2.size() + 5; i++)
     {
         list_ema.push_back(i);
     }
+
+    EMA_LISTS.reserve(list_ema.size());
 
     for (const int i : list_ema)
     {
@@ -111,25 +122,25 @@ void INITIALIZE_DATA0(const KLINEf &kline)
 
 //////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 
-RUN_RESULTf PROCESS(const KLINEf &KLINEf, const int ema1_v, const int ema2_v)
+RUN_RESULTf PROCESS(const KLINEf &kline_data, const int ema1_v, const int ema2_v)
 {
-    std::vector<float> EMA1 = EMA_LISTS["EMA" + std::to_string(ema1_v)];
-    std::vector<float> EMA2 = EMA_LISTS["EMA" + std::to_string(ema2_v)];
+    const std::vector<float> &EMA1 = EMA_LISTS["EMA" + std::to_string(ema1_v)];
+    const std::vector<float> &EMA2 = EMA_LISTS["EMA" + std::to_string(ema2_v)];
 
     bool LAST_ITERATION = false, OPEN_LONG_CONDI = false, OPEN_SHORT_CONDI = false, CLOSE_LONG_CONDI = false, CLOSE_SHORT_CONDI = false;
     bool IN_POSITION = false, IN_LONG = false, IN_SHORT = false;
     int nb_profit = 0, nb_loss = 0, NB_POSI_ENTERED = 0;
-    int nb_max = KLINEf.nb;
+    const int nb_max = kline_data.nb;
     float current_price = 0, starting_price = 0, pc_change = 0, pc_change_with_max = 0, max_drawdown = 0, price_position_open = 0;
     float USDT_amount = 1000.0;
     float MAX_USDT_AMOUNT = USDT_amount;
     float amount_b = 0;
 
-    std::vector<float> close = KLINEf.close;
+    const std::vector<float> &close = kline_data.close;
 
     int ii_begin = find_max(range1) + 2;
 
-    for (size_t ii = ii_begin; ii < KLINEf.nb; ii++)
+    for (size_t ii = ii_begin; ii < kline_data.nb; ii++)
     {
         if (ii == nb_max - 1)
         {
@@ -173,6 +184,7 @@ RUN_RESULTf PROCESS(const KLINEf &KLINEf, const int ema1_v, const int ema2_v)
             RUN_RESULTf result;
 
             result.AMOUNT_USDT = 0;
+            result.WALLET_VAL_USDT = 0;
             result.gain_over_DDC = 0;
             result.gain_pc = 0;
             result.max_DD = -100.0;
@@ -330,8 +342,9 @@ RUN_RESULTf PROCESS(const KLINEf &KLINEf, const int ema1_v, const int ema2_v)
 
     i_print++;
 
-    RUN_RESULTf result;
+    RUN_RESULTf result{};
 
+    result.WALLET_VAL_USDT = USDT_amount;
     result.AMOUNT_USDT = USDT_amount;
     result.gain_over_DDC = gain / DDC;
     result.gain_pc = gain;
@@ -347,54 +360,6 @@ RUN_RESULTf PROCESS(const KLINEf &KLINEf, const int ema1_v, const int ema2_v)
 
     return result;
 }
-
-//////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
-
-KLINEf read_input_data0(const std::string &input_file_path)
-{
-    KLINEf kline;
-
-    ifstream myfile(input_file_path);
-    std::string line;
-    long ts;
-    long ts_prev = 0;
-    float op, hi, lo, cl, vol;
-
-    bool skipped_first = false;
-
-    std::cout << "Reading data file..." << std::endl;
-
-    if (myfile.is_open())
-    {
-        while (getline(myfile, line))
-        {
-            if (!skipped_first)
-            {
-                skipped_first = true;
-                continue;
-            }
-            sscanf(line.c_str(), "%ld,%f,%f,%f,%f,%f", &ts, &op, &hi, &lo, &cl, &vol);
-            if (ts_prev == ts)
-            {
-                std::cout << "Found duplciate. Skipping." << std::endl;
-                continue;
-            }
-            ts_prev = ts;
-            kline.timestamp.push_back(ts / long(1000));
-            kline.open.push_back(op);
-            kline.high.push_back(hi);
-            kline.low.push_back(lo);
-            kline.close.push_back(cl);
-        }
-        myfile.close();
-
-        kline.nb = int(kline.close.size());
-    }
-    std::cout << "Done." << std::endl;
-    return kline;
-}
-
-//////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 
 int main()
 {
@@ -416,7 +381,7 @@ int main()
         std::cout << "Initialized TA-Lib !\n";
     }
 
-    kline = read_input_data0(DATAFILE);
+    kline = read_input_data(DATAFILE);
 
     INITIALIZE_DATA0(kline);
 

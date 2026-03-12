@@ -244,7 +244,7 @@ def PROCESS(kline, ema1_v, ema2_v):
     #     i_print = 0
     #     print("DONE: EMA: ", ema1_v, " and EMA: ", ema2_v)
 
-    result.WALLET_VAL_USDT = USDT_amount
+    result.WALLET_VAL_USDT = WALLET_VAL_USDT
     result.gain_over_DDC = gain / DDC
     result.gain_pc = gain
     result.max_DD = max_drawdown

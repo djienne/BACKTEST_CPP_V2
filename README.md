@@ -87,6 +87,40 @@ After compilation, execute a strategy backtest:
 ./backtest_double_EMA_float.exe  # or any other compiled strategy
 ```
 
+## Shared Core
+
+Recent refactors moved common backtest mechanics into a shared trade core:
+- `tools.*` owns shared data loading, timestamp alignment, funding lookup, reporting helpers, and generic utilities
+- `custom_talib_wrapper.*` owns indicator wrappers and TA-Lib integration
+- `trade_core.*` owns reusable trade execution mechanics such as open/close handling, fee/funding application, wallet snapshots, drawdown tracking, and common result assembly
+
+Strategy files should keep their own signal logic and parameter sweeps, but defer shared wallet and position mechanics to the common modules whenever possible.
+
+## Regression Safety
+
+For low-risk refactors, keep the shared utility layer as the single source of truth:
+- use `read_input_data`, `read_input_data_f`, and `read_funding_rates_data` instead of strategy-local parsers
+- compare `gain`, `max DD`, `win rate`, `trade count`, and final wallet value before/after refactors
+- use `verification_regression.cpp` for a fast smoke test of CSV loading, JSON loading, TA-Lib wrappers, timestamp alignment, and funding lookups
+- use `strategy_regression.cpp` for one fixed multi-pair spot case through the shared trade core
+
+Build the regression probe with:
+```bash
+make verification
+./verification_regression.exe
+```
+
+Build the fixed multi-pair regression harness with:
+```bash
+make strategy_regression
+./strategy_regression.exe
+```
+
+To run the tracked regression checks on Windows/PowerShell:
+```powershell
+powershell -File .\run_regression.ps1
+```
+
 ## Data Format
 Data is provided in the `data` directory for several pairs and timeframes (outdated) for tests.
 

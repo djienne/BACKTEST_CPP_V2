@@ -241,7 +241,7 @@ RUN_RESULTf PROCESS(vector<KLINEf> &PAIRS, const int &ema_f, const int &ema_s, c
         print_best_res(best);
     }
 
-    result.WALLET_VAL_USDT = USDT_amount;
+    result.WALLET_VAL_USDT = WALLET_VAL_USDT;
     result.gain_over_DDC = gain / DDC;
     result.gain_pc = gain;
     result.max_DD = max_drawdown;
