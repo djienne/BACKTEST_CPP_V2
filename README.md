@@ -7,9 +7,19 @@ A high-performance backtesting framework for running fast and memory-efficient b
 - Strategies with `F_` prefix are designed for futures markets, while those without the prefix are for spot markets.
 - Uses `float` (32-bit) variables instead of `double` (64-bit) in many hot paths, which can cut numeric array memory usage by about 2x and may improve speed in memory-heavy workloads.
 
+## Performance Comparison
+
+Current end-to-end benchmark for the simple 2-EMA crossover on `BTC-USDT 1h`:
+
+| Implementation | Parameter sweep | Total time | Relative to C++ | Notes |
+| --- | ---: | ---: | ---: | --- |
+| C++ | 174,936 pairs | 12.99 s | 1.00x | Measured |
+| Python + Numba | 174,936 pairs | 39.80 s | 3.06x slower | Measured |
+| Pure Python | 174,936 pairs | ~6323 s | 486.59x slower | Estimated from a measured 1024-pair run |
+
 ## Features
 - Leverages TA-lib (Technical Analysis Library) for technical indicators
-- Extremely fast performance compared to Python implementations (~3000x faster)
+- Large speedups compared to pure Python implementations in benchmarked cases
 - Low memory footprint
 - Supports multiple trading pairs
 - Includes built-in statistics for strategy evaluation (win rate, drawdown, Calmar ratio, etc.)
@@ -127,16 +137,6 @@ That script also compile-checks the active strategies that depend on `trade_core
 Data is provided in the `data` directory for several pairs and timeframes (outdated) for tests.
 
 If you want more up-to-date data you can see on the folder `data_downloader_freqtrade` a project to download data with Freqtrade and Docker as `.json` format (See `README.md` inside).
-
-## Performance Comparison
-
-Current end-to-end benchmark for the simple 2-EMA crossover on `BTC-USDT 1h`:
-
-| Implementation | Parameter sweep | Total time | Relative to C++ | Notes |
-| --- | ---: | ---: | ---: | --- |
-| C++ | 174,936 pairs | 12.99 s | 1.00x | Measured |
-| Python + Numba | 174,936 pairs | 39.80 s | 3.06x slower | Measured |
-| Pure Python | 174,936 pairs | ~6323 s | 486.59x slower | Estimated from a measured 1024-pair run |
 
 ## Example Results
 
