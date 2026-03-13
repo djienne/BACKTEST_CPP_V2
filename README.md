@@ -130,25 +130,13 @@ If you want more up-to-date data you can see on the folder `data_downloader_freq
 
 ## Performance Comparison
 
-C++ vs Python implementation of `backtest_double_EMA_StochRSI_float`:
+Current end-to-end benchmark for the simple 2-EMA crossover on `BTC-USDT 1h`:
 
-```
-C++ Implementation:
--------------------------------------
-Number of backtests performed : 9120
-Time taken                    : 2 seconds 
-RAM usage                     : 14.3 MB
--------------------------------------
-
-Python Implementation:
--------------------------------------
-Number of backtests performed :  9120
-Time taken                    :  5955 seconds 
-RAM usage                     :  86.0 MB
--------------------------------------
-
-The C++ code is ~3000 times faster than the Python version.
-```
+| Implementation | Parameter sweep | Total time | Relative to C++ | Notes |
+| --- | ---: | ---: | ---: | --- |
+| C++ | 174,936 pairs | 12.99 s | 1.00x | Measured |
+| Python + Numba | 174,936 pairs | 39.80 s | 3.06x slower | Measured |
+| Pure Python | 174,936 pairs | ~6323 s | 486.59x slower | Estimated from a measured 1024-pair run |
 
 ## Example Results
 
