@@ -8,6 +8,7 @@
 #include <math.h>
 #include <unordered_map>
 #include "tools.hh"
+#include "trade_core.hh"
 #include "custom_talib_wrapper.hh"
 #include <ta-lib/ta_libc.h>
 #include <iomanip>
@@ -99,32 +100,17 @@ RUN_RESULTf PROCESS(std::vector<KLINEf> &df, const std::vector<fundings> &FUNDIN
     nb_tested++;
 
     RUN_RESULTf result{};
-
-    std::vector<float> USDT_tracking{};
-    std::vector<int> USDT_tracking_ts{};
-    USDT_tracking.reserve(2000);
-    USDT_tracking_ts.reserve(2000);
+    trade_core::WalletTrace wallet_trace{};
+    wallet_trace.wallet_values.reserve(2000);
+    wallet_trace.timestamps.reserve(2000);
+    trade_core::TradeStats stats{};
+    trade_core::PortfolioState<NB_PAIRS> portfolio(USDT_amount_initial);
 
     const uint nb_max = df[0].close.size();
 
     bool LAST_ITERATION = false;
-    uint nb_profit = 0;
-    uint nb_loss = 0;
-    uint NB_POSI_ENTERED = 0;
-    float pc_change_with_max = 0, max_drawdown = 0;
-    float USDT_amount = USDT_amount_initial;
-    float MAX_WALLET_VAL_USDT = USDT_amount_initial;
-    float total_fees_paid_USDT = 0.0f;
-    float WALLET_VAL_USDT = USDT_amount_initial;
-    std::array<float, NB_PAIRS> price_position_open{};
-    std::array<float, NB_PAIRS> COIN_AMOUNTS{};
-    std::array<float, NB_PAIRS> take_profit{};
-    std::array<float, NB_PAIRS> stop_loss{};
-    std::array<float, NB_PAIRS> stop_loss_at_open{};
     std::array<float, NB_PAIRS> ATR_AT_OPEN{};
     std::array<uint, NB_PAIRS> OPEN_TS{};
-
-    uint ACTIVE_POSITIONS = 0;
 
     const uint ii_begin = start_indexes[0];
 
@@ -162,12 +148,7 @@ RUN_RESULTf PROCESS(std::vector<KLINEf> &df, const std::vector<fundings> &FUNDIN
             // APPLY FUNDING FEES
             const float funding_fee = get_funding_fee_if_any(FUNDINGS[ic], df[ic].timestamp[ii]);
 
-            if (funding_fee != 0.0f && COIN_AMOUNTS[ic] != 0.0f)
-            {
-                const float fe = COIN_AMOUNTS[ic] * df[ic].close[ii] * funding_fee; // positive funding fees means shorts get paid
-                total_fees_paid_USDT += fe;
-                USDT_amount -= fe;
-            }
+            trade_core::apply_funding_fee(portfolio, ic, df[ic].close[ii], funding_fee);
 
             // conditions for open / close position
 
@@ -176,109 +157,53 @@ RUN_RESULTf PROCESS(std::vector<KLINEf> &df, const std::vector<fundings> &FUNDIN
             const bool OPEN_SHORT_CONDI = df[ic].EMA[ema1][ii] < df[ic].EMA[ema2][ii] && df[ic].EMA[ema2][ii] < df[ic].EMA[ema3][ii] && df[ic].close[ii] < df[ic].EMA[ema1][ii] && df[ic].StochRSI_K[ii] >= STOCH_RSI_UPPER && df[ic].StochRSI_D[ii] >= STOCH_RSI_UPPER && df[ic].StochRSI_K[ii - 1] <= df[ic].StochRSI_D[ii - 1] && df[ic].StochRSI_K[ii] >= df[ic].StochRSI_D[ii];
 
             bool timeout = false;
-            if (COIN_AMOUNTS[ic] != 0.0f)
+            if (portfolio.coin_amounts[ic] != 0.0f)
             {
                 timeout = (df[ic].timestamp[ii] - OPEN_TS[ic]) >= 2 * 24 * 3600;
             }
 
-            const bool CLOSE_LONG_CONDI = df[ic].high[ii] >= price_position_open[ic] + up * ATR_AT_OPEN[ic] || df[ic].low[ii] <= price_position_open[ic] - down * ATR_AT_OPEN[ic] || timeout;
+            const bool CLOSE_LONG_CONDI = df[ic].high[ii] >= portfolio.price_position_open[ic] + up * ATR_AT_OPEN[ic] || df[ic].low[ii] <= portfolio.price_position_open[ic] - down * ATR_AT_OPEN[ic] || timeout;
 
-            const bool CLOSE_SHORT_CONDI = df[ic].low[ii] <= price_position_open[ic] - up * ATR_AT_OPEN[ic] || df[ic].high[ii] >= price_position_open[ic] + down * ATR_AT_OPEN[ic] || timeout;
+            const bool CLOSE_SHORT_CONDI = df[ic].low[ii] <= portfolio.price_position_open[ic] - up * ATR_AT_OPEN[ic] || df[ic].high[ii] >= portfolio.price_position_open[ic] + down * ATR_AT_OPEN[ic] || timeout;
 
             // IT IS IMPORTANT TO CHECK FIRST FOR CLOSING POSITION AND ONLY THEN FOR OPENING POSITION
 
             // CLOSE LONG
-            if (COIN_AMOUNTS[ic] > 0.0f && (CLOSE_LONG_CONDI || LAST_ITERATION))
+            if (portfolio.coin_amounts[ic] > 0.0f && (CLOSE_LONG_CONDI || LAST_ITERATION))
             {
-                const float to_add = COIN_AMOUNTS[ic] * df[ic].close[ii];
-                USDT_amount += to_add;
-                // apply FEEs
-                const float fe = to_add * FEE / 100.0f;
-                USDT_amount -= std::abs(fe);
-                total_fees_paid_USDT += std::abs(fe);
-                //
-                if (df[ic].close[ii] >= price_position_open[ic])
-                {
-                    nb_profit++;
-                }
-                else
-                {
-                    nb_loss++;
-                }
+                trade_core::close_futures_long(portfolio, stats, ic, df[ic].close[ii], FEE);
                 closed = true;
-                ACTIVE_POSITIONS--;
-                COIN_AMOUNTS[ic] = 0.0f;
-
                 ATR_AT_OPEN[ic] = 0.0f;
                 OPEN_TS[ic] = -10;
-                price_position_open[ic] = 0.0f;
+                portfolio.price_position_open[ic] = 0.0f;
             }
 
             // CLOSE SHORT
-            if (CAN_SHORT && COIN_AMOUNTS[ic] < 0.0f && (CLOSE_SHORT_CONDI || LAST_ITERATION))
+            if (CAN_SHORT && portfolio.coin_amounts[ic] < 0.0f && (CLOSE_SHORT_CONDI || LAST_ITERATION))
             {
-                const float to_add = std::abs(COIN_AMOUNTS[ic]) * (2.0f * price_position_open[ic] - df[ic].close[ii]);
-                USDT_amount += to_add;
-                // apply FEEs
-                const float fe = to_add * FEE / 100.0f;
-                USDT_amount -= std::abs(fe);
-                total_fees_paid_USDT += std::abs(fe);
-                //
-                if (df[ic].close[ii] <= price_position_open[ic])
-                {
-                    nb_profit++;
-                }
-                else
-                {
-                    nb_loss++;
-                }
+                trade_core::close_futures_short(portfolio, stats, ic, df[ic].close[ii], FEE);
                 closed = true;
-                ACTIVE_POSITIONS--;
-                COIN_AMOUNTS[ic] = 0.0f;
-
                 ATR_AT_OPEN[ic] = 0.0f;
                 OPEN_TS[ic] = -10;
-                price_position_open[ic] = 0.0f;
+                portfolio.price_position_open[ic] = 0.0f;
             }
 
             // OPEN LONG
-            if (COIN_AMOUNTS[ic] == 0.0f && OPEN_LONG_CONDI && !LAST_ITERATION && ACTIVE_POSITIONS < MAX_OPEN_TRADES && USDT_amount > 0.0f)
+            if (portfolio.coin_amounts[ic] == 0.0f && OPEN_LONG_CONDI && !LAST_ITERATION && portfolio.active_positions < MAX_OPEN_TRADES && portfolio.usdt_amount > 0.0f)
             {
-                // order of lines is important
-                const float usdMultiplier = 1.0f / float(MAX_OPEN_TRADES - ACTIVE_POSITIONS);
-                COIN_AMOUNTS[ic] = USDT_amount * usdMultiplier / df[ic].close[ii];
-                USDT_amount -= USDT_amount * usdMultiplier;
-                // apply FEEs
-                const float fe = std::abs(COIN_AMOUNTS[ic] * df[ic].close[ii] * FEE / 100.0f);
-                USDT_amount -= fe;
-                total_fees_paid_USDT += fe;
-                //
-                ACTIVE_POSITIONS++;
-                NB_POSI_ENTERED++;
+                trade_core::open_futures_long(portfolio, stats, ic, df[ic].close[ii], FEE, MAX_OPEN_TRADES);
 
                 ATR_AT_OPEN[ic] = df[ic].ATR[ii];
                 OPEN_TS[ic] = df[ic].timestamp[ii];
-                price_position_open[ic] = df[ic].close[ii];
             }
 
             // OPEN SHORT
-            if (CAN_SHORT && COIN_AMOUNTS[ic] == 0.0f && OPEN_SHORT_CONDI && !LAST_ITERATION && ACTIVE_POSITIONS < MAX_OPEN_TRADES && USDT_amount > 0.0f)
+            if (CAN_SHORT && portfolio.coin_amounts[ic] == 0.0f && OPEN_SHORT_CONDI && !LAST_ITERATION && portfolio.active_positions < MAX_OPEN_TRADES && portfolio.usdt_amount > 0.0f)
             {
-                // order of lines is important
-                const float usdMultiplier = 1.0f / float(MAX_OPEN_TRADES - ACTIVE_POSITIONS);
-                COIN_AMOUNTS[ic] = -1.0f * USDT_amount * usdMultiplier / df[ic].close[ii];
-                USDT_amount -= USDT_amount * usdMultiplier;
-                // apply FEEs
-                const float fe = std::abs(COIN_AMOUNTS[ic] * df[ic].close[ii] * FEE / 100.0f);
-                USDT_amount -= fe;
-                total_fees_paid_USDT += fe;
-                //
-                ACTIVE_POSITIONS++;
-                NB_POSI_ENTERED++;
+                trade_core::open_futures_short(portfolio, stats, ic, df[ic].close[ii], FEE, MAX_OPEN_TRADES);
 
                 ATR_AT_OPEN[ic] = df[ic].ATR[ii];
                 OPEN_TS[ic] = df[ic].timestamp[ii];
-                price_position_open[ic] = df[ic].close[ii];
             }
         }
 
@@ -291,21 +216,7 @@ RUN_RESULTf PROCESS(std::vector<KLINEf> &df, const std::vector<fundings> &FUNDIN
                 current_closes[ic] = df[ic].close[ii];
             }
 
-            WALLET_VAL_USDT = calculate_wallet_val_usdt<NB_PAIRS>(USDT_amount, COIN_AMOUNTS, current_closes, price_position_open);
-
-            if (WALLET_VAL_USDT > MAX_WALLET_VAL_USDT)
-            {
-                MAX_WALLET_VAL_USDT = WALLET_VAL_USDT;
-            }
-
-            pc_change_with_max = (WALLET_VAL_USDT - MAX_WALLET_VAL_USDT) / MAX_WALLET_VAL_USDT * 100.0f;
-            if (pc_change_with_max < max_drawdown)
-            {
-                max_drawdown = pc_change_with_max;
-            }
-
-            USDT_tracking.push_back(WALLET_VAL_USDT);
-            USDT_tracking_ts.push_back(df[0].timestamp[ii]);
+            trade_core::record_futures_snapshot(portfolio, wallet_trace, current_closes, df[0].timestamp[ii]);
         }
     }
 
@@ -315,30 +226,19 @@ RUN_RESULTf PROCESS(std::vector<KLINEf> &df, const std::vector<fundings> &FUNDIN
         last_closes[ic] = df[ic].close[nb_max - 1];
     }
 
-    WALLET_VAL_USDT = calculate_wallet_val_usdt<NB_PAIRS>(USDT_amount, COIN_AMOUNTS, last_closes, price_position_open);
+    const float wallet_val_usdt = calculate_wallet_val_usdt<NB_PAIRS>(portfolio.usdt_amount, portfolio.coin_amounts, last_closes, portfolio.price_position_open);
 
-    const float gain = (WALLET_VAL_USDT - USDT_amount_initial) / USDT_amount_initial * 100.0f;
-    const float WR = float(nb_profit) / float(NB_POSI_ENTERED) * 100.0f;
-    const float DDC = (1.0f / (1.0f + max_drawdown / 100.0f) - 1.0f) * 100.0f;
-    const float score = gain / DDC * WR;
+    const trade_core::ResultMetrics metrics = trade_core::calculate_result_metrics(wallet_val_usdt, USDT_amount_initial, portfolio.max_drawdown, stats);
 
-    result.WALLET_VAL_USDT = WALLET_VAL_USDT;
-    result.gain_over_DDC = gain / DDC;
-    result.gain_pc = gain;
-    result.max_DD = max_drawdown;
-    result.nb_posi_entered = NB_POSI_ENTERED;
-    result.win_rate = WR;
-    result.score = score;
-    result.calmar_ratio_monthly = calculate_calmar_ratio_monthly(USDT_tracking_ts, USDT_tracking, DDC);
-    result.calmar_ratio = calculate_calmar_ratio(USDT_tracking_ts, USDT_tracking, DDC);
+    trade_core::populate_common_result(result, metrics, wallet_val_usdt, portfolio.max_drawdown, portfolio.total_fees_paid_usdt, stats, MAX_OPEN_TRADES);
+    result.calmar_ratio_monthly = calculate_calmar_ratio_monthly(wallet_trace.timestamps, wallet_trace.wallet_values, metrics.ddc);
+    result.calmar_ratio = calculate_calmar_ratio(wallet_trace.timestamps, wallet_trace.wallet_values, metrics.ddc);
     result.ema1 = ema1;
     result.ema2 = ema2;
     result.ema3 = ema3;
     result.up = up;
     result.down = down;
     result.SRSIL = STOCH_RSI_LOWER;
-    result.total_fees_paid = total_fees_paid_USDT;
-    result.max_open_trades = MAX_OPEN_TRADES;
     result.param_str = "\n  EMA1: " + std::to_string(ema1) + " ; EMA2: " + std::to_string(ema2) + " ; EMA3: " + std::to_string(ema3) +
                        "\n  up: " + std::to_string(up) + " ; down: " + std::to_string(down) + " ; STOCH_RSI_LOWER: " + std::to_string(STOCH_RSI_LOWER) + " ; STOCH_RSI_UPPER: " + std::to_string(STOCH_RSI_UPPER);
 

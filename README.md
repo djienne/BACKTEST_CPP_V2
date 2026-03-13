@@ -94,7 +94,7 @@ Recent refactors moved common backtest mechanics into a shared trade core:
 - `custom_talib_wrapper.*` owns indicator wrappers and TA-Lib integration
 - `trade_core.*` owns reusable trade execution mechanics such as open/close handling, fee/funding application, wallet snapshots, drawdown tracking, and common result assembly
 
-Strategy files should keep their own signal logic and parameter sweeps, but defer shared wallet and position mechanics to the common modules whenever possible.
+The active multi-pair spot/futures strategy families now use that shared execution layer. Strategy files should keep their own signal logic and parameter sweeps, but defer shared wallet and position mechanics to the common modules whenever possible.
 
 ## Regression Safety
 
@@ -120,6 +120,8 @@ To run the tracked regression checks on Windows/PowerShell:
 ```powershell
 powershell -File .\run_regression.ps1
 ```
+
+That script also compile-checks the active strategies that depend on `trade_core.*`, so interface drift shows up quickly during refactors.
 
 ## Data Format
 Data is provided in the `data` directory for several pairs and timeframes (outdated) for tests.
