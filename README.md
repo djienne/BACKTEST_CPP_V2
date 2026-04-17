@@ -103,8 +103,9 @@ Recent refactors moved common backtest mechanics into a shared trade core:
 - `tools.*` owns shared data loading, timestamp alignment, funding lookup, reporting helpers, and generic utilities
 - `custom_talib_wrapper.*` owns indicator wrappers and TA-Lib integration
 - `trade_core.*` owns reusable trade execution mechanics such as open/close handling, fee/funding application, wallet snapshots, drawdown tracking, and common result assembly
+- `strategy_runner.hh` (header-only) owns the parameter-sweep loop, banner/result printing, and score-file cadence — so strategy files only keep their signal logic, indicator precomputation, and parameter ranges
 
-The active multi-pair spot/futures strategy families now use that shared execution layer. Strategy files should keep their own signal logic and parameter sweeps, but defer shared wallet and position mechanics to the common modules whenever possible.
+The active multi-pair spot strategy families now use that shared execution and sweep layer. Futures (`F_*`) strategies use a threaded `mainProgramLogic` pattern and still drive their sweeps manually; they share the trade-core mechanics but not the sweep runner.
 
 ## Regression Safety
 
@@ -126,12 +127,18 @@ make strategy_regression
 ./strategy_regression.exe
 ```
 
+Build and run the unit test suite (fast, no data dependencies — covers `trade_core` fee math, result metrics, drawdown tracking, range helpers, and TA-Lib smoke):
+```bash
+make tests
+./tests.exe
+```
+
 To run the tracked regression checks on Windows/PowerShell:
 ```powershell
 powershell -File .\run_regression.ps1
 ```
 
-That script also compile-checks the active strategies that depend on `trade_core.*`, so interface drift shows up quickly during refactors.
+That script runs `tests.exe` first, then compile-checks every strategy and runs the three regression harnesses — so interface drift, broken math, and numeric drift all surface quickly during refactors.
 
 ## Data Format
 Data is provided in the `data` directory for several pairs and timeframes (outdated) for tests.

@@ -6,6 +6,7 @@
 #include <math.h>
 #include <unordered_map>
 #include "tools.hh"
+#include "trade_core.hh"
 #include "custom_talib_wrapper.hh"
 #include <ta-lib/ta_libc.h>
 
@@ -14,12 +15,8 @@ using namespace std;
 const string STRAT_NAME = "2EMA_crossover";
 const string out_filename = STRAT_NAME + "_best.txt";
 
-const float FRACTION_PER_POSI = 1.0; // FRACTION OF CAPITAL PER POSITION
-const float LEV = 1.0;               // LEVERAGE
-const float FEE = 0.1;               // FEES
-const float FUNDING_FEE = 0.00;      // FUNDING FEE APPLIED EVERY 8 hours
-const bool CAN_LONG = true;          // LONG ON OR OFF
-const bool CAN_SHORT = false;        // SHORT ON OR OFF
+const float FEE = 0.1f;                   // FEES in %
+const float USDT_amount_initial = 1000.0f;
 const double MAX_ALLOWED_DD = -40.0;
 const std::string PAIR = "BTC-USDT";
 const std::string DATAFILE = "./data/data/binance/1h/" + PAIR + ".csv";
@@ -126,238 +123,56 @@ RUN_RESULTf PROCESS(const KLINEf &kline_data, const int ema1_v, const int ema2_v
 {
     const std::vector<float> &EMA1 = EMA_LISTS["EMA" + std::to_string(ema1_v)];
     const std::vector<float> &EMA2 = EMA_LISTS["EMA" + std::to_string(ema2_v)];
-
-    bool LAST_ITERATION = false, OPEN_LONG_CONDI = false, OPEN_SHORT_CONDI = false, CLOSE_LONG_CONDI = false, CLOSE_SHORT_CONDI = false;
-    bool IN_POSITION = false, IN_LONG = false, IN_SHORT = false;
-    int nb_profit = 0, nb_loss = 0, NB_POSI_ENTERED = 0;
-    const int nb_max = kline_data.nb;
-    float current_price = 0, starting_price = 0, pc_change = 0, pc_change_with_max = 0, max_drawdown = 0, price_position_open = 0;
-    float USDT_amount = 1000.0;
-    float MAX_USDT_AMOUNT = USDT_amount;
-    float amount_b = 0;
-
     const std::vector<float> &close = kline_data.close;
+    const int nb_max = kline_data.nb;
+    const int ii_begin = find_max(range1) + 2;
 
-    int ii_begin = find_max(range1) + 2;
+    trade_core::TradeStats stats{};
+    trade_core::PortfolioState<1> portfolio(USDT_amount_initial);
 
-    for (size_t ii = ii_begin; ii < kline_data.nb; ii++)
+    // Signal-only strategy on a single asset: use trade_core's spot long helpers.
+    // Drawdown is tracked off realized USDT (updated only at position transitions),
+    // which matches the previous inline-PnL behavior exactly since USDT is constant
+    // while a position is open.
+    for (int ii = ii_begin; ii < nb_max; ii++)
     {
-        if (ii == nb_max - 1)
+        const bool LAST_ITERATION = (ii == nb_max - 1);
+        const bool OPEN_LONG_CONDI = (EMA2[ii] >= EMA1[ii]) && (EMA2[ii - 1] <= EMA1[ii - 1]);
+        const bool CLOSE_LONG_CONDI = (EMA2[ii] <= EMA1[ii]) && (EMA2[ii - 1] >= EMA1[ii - 1]);
+
+        // IMPORTANT: close before open.
+        if (portfolio.coin_amounts[0] > 0.0f && (CLOSE_LONG_CONDI || LAST_ITERATION))
         {
-            LAST_ITERATION = true;
-        }
+            trade_core::close_spot_long(portfolio, stats, 0, close[ii], FEE);
 
-        current_price = close[ii];
-
-        if (ii == ii_begin)
-        {
-            starting_price = close[ii];
-        }
-
-        pc_change = (USDT_amount - 1000.0) / 1000.0 * 100.0;
-
-        if (USDT_amount > MAX_USDT_AMOUNT)
-        {
-            MAX_USDT_AMOUNT = USDT_amount;
-        }
-
-        pc_change_with_max = (USDT_amount - MAX_USDT_AMOUNT) / MAX_USDT_AMOUNT * 100.0;
-
-        if (pc_change_with_max < max_drawdown)
-        {
-            max_drawdown = pc_change_with_max;
-        }
-
-        double USDT_amount_check = 100.0;
-
-        if (IN_SHORT && IN_POSITION)
-        {
-            USDT_amount_check = USDT_amount - (current_price - price_position_open) / price_position_open * FRACTION_PER_POSI * USDT_amount * LEV;
-        }
-        if (IN_LONG && IN_POSITION)
-        {
-            USDT_amount_check = USDT_amount + (current_price - price_position_open) / price_position_open * FRACTION_PER_POSI * USDT_amount * LEV;
-        }
-
-        if (USDT_amount_check <= 0)
-        {
-            RUN_RESULTf result;
-
-            result.AMOUNT_USDT = 0;
-            result.WALLET_VAL_USDT = 0;
-            result.gain_over_DDC = 0;
-            result.gain_pc = 0;
-            result.max_DD = -100.0;
-            result.nb_posi_entered = NB_POSI_ENTERED;
-            result.win_rate = 0;
-            result.score = 0;
-            result.ema1 = ema1_v;
-            result.ema2 = ema2_v;
-
-            return result;
-        }
-
-        // Funding fees
-
-        if (IN_POSITION)
-        {
-            if (((hour[ii] >= 2) && (hour[ii - 1] < 2)) || ((hour[ii] >= 10) && (hour[ii - 1] < 10)) || ((hour[ii] >= 18) && (hour[ii - 1] < 18)))
+            const float wallet_val_usdt = portfolio.usdt_amount;
+            if (wallet_val_usdt > portfolio.max_wallet_val_usdt)
             {
-                float to_rm = current_price / price_position_open * FRACTION_PER_POSI * USDT_amount * LEV * FUNDING_FEE / 100.0;
-                USDT_amount = USDT_amount - to_rm;
+                portfolio.max_wallet_val_usdt = wallet_val_usdt;
+            }
+            const float pc_change_with_max = (wallet_val_usdt - portfolio.max_wallet_val_usdt) / portfolio.max_wallet_val_usdt * 100.0f;
+            if (pc_change_with_max < portfolio.max_drawdown)
+            {
+                portfolio.max_drawdown = pc_change_with_max;
             }
         }
 
-        // check if should go in position
-
-        OPEN_LONG_CONDI = (EMA2[ii] >= EMA1[ii]) && (EMA2[ii - 1] <= EMA1[ii - 1]);
-        OPEN_SHORT_CONDI = (EMA2[ii] <= EMA1[ii]) && (EMA2[ii - 1] >= EMA1[ii - 1]);
-
-        CLOSE_LONG_CONDI = (EMA2[ii] <= EMA1[ii]) && (EMA2[ii - 1] >= EMA1[ii - 1]);
-        CLOSE_SHORT_CONDI = (EMA2[ii] >= EMA1[ii]) && (EMA2[ii - 1] <= EMA1[ii - 1]);
-
-        // IT IS IMPORTANT TO CHECK FIRST FOR CLOSING POSITION AND THEN FOR OPENING POSITION
-
-        // CLOSE SHORT
-        if ((IN_POSITION && IN_SHORT) && (CLOSE_SHORT_CONDI || LAST_ITERATION))
+        if (portfolio.coin_amounts[0] == 0.0f && OPEN_LONG_CONDI && !LAST_ITERATION)
         {
-            amount_b = USDT_amount;
-
-            USDT_amount = USDT_amount - (current_price - price_position_open) / price_position_open * FRACTION_PER_POSI * USDT_amount * LEV;
-
-            // apply FEEs
-            if (FEE > 0)
-            {
-                USDT_amount = USDT_amount - current_price / price_position_open * FRACTION_PER_POSI * amount_b * LEV * FEE / 100.0;
-            }
-            else
-            {
-                USDT_amount = USDT_amount - current_price / price_position_open * FRACTION_PER_POSI * amount_b * FEE / 100.0;
-            }
-            //
-
-            IN_POSITION = false;
-            IN_SHORT = false;
-            IN_LONG = false;
-
-            pc_change = -(current_price - price_position_open) / price_position_open * 100.0;
-
-            if (current_price < price_position_open)
-            {
-                nb_profit = nb_profit + 1;
-            }
-            else
-            {
-                nb_loss = nb_loss + 1;
-            }
-        }
-        // CLOSE LONG
-        if ((IN_POSITION && IN_LONG) && (CLOSE_LONG_CONDI || LAST_ITERATION))
-        {
-            amount_b = USDT_amount;
-
-            USDT_amount = USDT_amount + (current_price - price_position_open) / price_position_open * FRACTION_PER_POSI * USDT_amount * LEV;
-
-            // apply FEEs
-            if (FEE > 0)
-            {
-                USDT_amount = USDT_amount - current_price / price_position_open * FRACTION_PER_POSI * amount_b * LEV * FEE / 100.0;
-            }
-            else
-            {
-                USDT_amount = USDT_amount - current_price / price_position_open * FRACTION_PER_POSI * amount_b * FEE / 100.0;
-            }
-            //
-
-            IN_POSITION = false;
-            IN_SHORT = false;
-            IN_LONG = false;
-
-            pc_change = (current_price - price_position_open) / price_position_open * 100.0;
-
-            if (current_price > price_position_open)
-            {
-                nb_profit = nb_profit + 1;
-            }
-            else
-            {
-                nb_loss = nb_loss + 1;
-            }
-        }
-
-        // Check to open position (should always be after check of closing)
-
-        // OPEN SHORT
-        if ((IN_POSITION == false) && (OPEN_SHORT_CONDI && CAN_SHORT))
-        {
-
-            price_position_open = current_price;
-
-            // apply FEEs
-            if (FEE > 0.0)
-            {
-                USDT_amount = USDT_amount - FRACTION_PER_POSI * USDT_amount * LEV * FEE / 100.0;
-            }
-            else
-            {
-                USDT_amount = USDT_amount - FRACTION_PER_POSI * USDT_amount * FEE / 100.0;
-            }
-
-            IN_POSITION = true;
-            IN_LONG = false;
-            IN_SHORT = true;
-
-            NB_POSI_ENTERED = NB_POSI_ENTERED + 1;
-        }
-        // OPEN LONG
-        if ((IN_POSITION == false) && (OPEN_LONG_CONDI && CAN_LONG))
-        {
-
-            price_position_open = current_price;
-
-            // apply FEEs
-            if (FEE > 0.0)
-            {
-                USDT_amount = USDT_amount - FRACTION_PER_POSI * USDT_amount * LEV * FEE / 100.0;
-            }
-            else
-            {
-                USDT_amount = USDT_amount - FRACTION_PER_POSI * USDT_amount * FEE / 100.0;
-            }
-
-            IN_POSITION = true;
-            IN_LONG = true;
-            IN_SHORT = false;
-
-            NB_POSI_ENTERED = NB_POSI_ENTERED + 1;
+            trade_core::open_spot_long(portfolio, stats, 0, close[ii], FEE, 1);
         }
     }
 
-    float gain = (USDT_amount - 1000.0) / 1000.0 * 100.0;
-    float WR = float(nb_profit) / float(NB_POSI_ENTERED) * 100.0;
-
-    float DDC = (1.0 / (1.0 + max_drawdown / 100.0) - 1.0) * 100.0;
-
-    float score = gain / DDC * WR;
+    const float wallet_val_usdt = portfolio.usdt_amount;
+    const trade_core::ResultMetrics metrics = trade_core::calculate_result_metrics(wallet_val_usdt, USDT_amount_initial, portfolio.max_drawdown, stats);
 
     i_print++;
 
     RUN_RESULTf result{};
-
-    result.WALLET_VAL_USDT = USDT_amount;
-    result.AMOUNT_USDT = USDT_amount;
-    result.gain_over_DDC = gain / DDC;
-    result.gain_pc = gain;
-    result.max_DD = max_drawdown;
-    result.nb_posi_entered = NB_POSI_ENTERED;
-    result.win_rate = WR;
-    result.score = score;
+    trade_core::populate_common_result(result, metrics, wallet_val_usdt, portfolio.max_drawdown, portfolio.total_fees_paid_usdt, stats, 1);
     result.ema1 = ema1_v;
     result.ema2 = ema2_v;
     result.param_str = "PAIR: " + PAIR + "; EMA1: " + std::to_string(ema1_v) + "; EMA2: " + std::to_string(ema2_v);
-    result.max_open_trades = 1;
-    result.total_fees_paid = NAN;
-
     return result;
 }
 
@@ -393,8 +208,8 @@ int main()
 
     std::cout << "Begining day : " << year[0] << "/" << month[0] << "/" << day[0] << std::endl;
     std::cout << "End day      : " << year.back() << "/" << month.back() << "/" << day.back() << std::endl;
-    std::cout << "CAN LONG     : " << CAN_LONG << std::endl; 
-    std::cout << "CAN SHORT    : " << CAN_SHORT << std::endl;
+    std::cout << "CAN LONG     : 1" << std::endl;
+    std::cout << "CAN SHORT    : 0" << std::endl;
 
     std::vector<doubleEMA_params> param_list{};
     param_list.reserve(range1.size() * range2.size());

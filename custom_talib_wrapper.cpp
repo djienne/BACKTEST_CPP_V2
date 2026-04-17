@@ -124,80 +124,42 @@ std::vector<float> TALIB_ATR(const std::vector<float> &high, const std::vector<f
     return run_ohlc_indicator(high, low, close, period, TA_S_ATR, "TALIB_ATR");
 }
 //////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
-std::vector<float> TALIB_STOCHRSI_not_averaged(const std::vector<float> &vals, const int nb_period_stoch, const int nb_period_rsi)
+// Shared StochRSI prologue: RSI -> rolling min/max -> rounded normalized series. The
+// three public entries (K, D, not-averaged) differ only in how many trailing SMAs they
+// apply.
+static std::vector<float> stoch_rsi_raw(const std::vector<float> &vals, const int nb_period_stoch, const int nb_period_rsi)
 {
-    std::vector<float> stochrsi{};
-    stochrsi.reserve(vals.size());
-    // lowest_rsi = rsi.rolling(length).min()
-    // highest_rsi = rsi.rolling(length).max()
-    // stochrsi = (rsi - lowest_rsi) / (highest_rsi - lowest_rsi)
-    std::vector<float> rsi = TALIB_RSI(vals, nb_period_rsi);
-    // std::cout << "Calculated RSI." << std::endl;
-    std::vector<float> highest_rsi = TALIB_MAX(rsi, nb_period_stoch);
-    std::vector<float> lowest_rsi = TALIB_MIN(rsi, nb_period_stoch);
+    const std::vector<float> rsi = TALIB_RSI(vals, nb_period_rsi);
+    const std::vector<float> highest_rsi = TALIB_MAX(rsi, nb_period_stoch);
+    const std::vector<float> lowest_rsi = TALIB_MIN(rsi, nb_period_stoch);
 
+    std::vector<float> stochrsi;
+    stochrsi.reserve(rsi.size());
     for (uint i = 0; i < rsi.size(); i++)
     {
         float val = (rsi[i] - lowest_rsi[i]) / (highest_rsi[i] - lowest_rsi[i]);
         if (std::isnan(val) || std::isinf(val))
         {
-            val = 0.0;
+            val = 0.0f;
         }
-        stochrsi.push_back(std::round(val * 1000.0) / 1000.0);
+        stochrsi.push_back(std::round(val * 1000.0f) / 1000.0f);
     }
-
     return stochrsi;
 }
-//////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
-std::vector<float> TALIB_STOCHRSI_K(const std::vector<float> &vals, const int nb_period_stoch, const int nb_period_rsi, const int nb_period_k, const int nb_period_d)
+
+std::vector<float> TALIB_STOCHRSI_not_averaged(const std::vector<float> &vals, const int nb_period_stoch, const int nb_period_rsi)
 {
-    std::vector<float> stochrsi{};
-    stochrsi.reserve(vals.size());
-    // lowest_rsi = rsi.rolling(length).min()
-    // highest_rsi = rsi.rolling(length).max()
-    // stochrsi = (rsi - lowest_rsi) / (highest_rsi - lowest_rsi)
-    std::vector<float> rsi = TALIB_RSI(vals, nb_period_rsi);
-    // std::cout << "Calculated RSI." << std::endl;
-    std::vector<float> highest_rsi = TALIB_MAX(rsi, nb_period_stoch);
-    std::vector<float> lowest_rsi = TALIB_MIN(rsi, nb_period_stoch);
-
-    for (uint i = 0; i < rsi.size(); i++)
-    {
-        float val = (rsi[i] - lowest_rsi[i]) / (highest_rsi[i] - lowest_rsi[i]);
-        if (std::isnan(val) || std::isinf(val))
-        {
-            val = 0.0;
-        }
-        stochrsi.push_back(std::round(val * 1000.0) / 1000.0);
-    }
-
-    return TALIB_SMA(stochrsi, nb_period_k);
+    return stoch_rsi_raw(vals, nb_period_stoch, nb_period_rsi);
 }
 
-//////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
+std::vector<float> TALIB_STOCHRSI_K(const std::vector<float> &vals, const int nb_period_stoch, const int nb_period_rsi, const int nb_period_k, const int /*nb_period_d*/)
+{
+    return TALIB_SMA(stoch_rsi_raw(vals, nb_period_stoch, nb_period_rsi), nb_period_k);
+}
+
 std::vector<float> TALIB_STOCHRSI_D(const std::vector<float> &vals, const int nb_period_stoch, const int nb_period_rsi, const int nb_period_k, const int nb_period_d)
 {
-    std::vector<float> stochrsi{};
-    stochrsi.reserve(vals.size());
-    // lowest_rsi = rsi.rolling(length).min()
-    // highest_rsi = rsi.rolling(length).max()
-    // stochrsi = (rsi - lowest_rsi) / (highest_rsi - lowest_rsi)
-    std::vector<float> rsi = TALIB_RSI(vals, nb_period_rsi);
-    // std::cout << "Calculated RSI." << std::endl;
-    std::vector<float> highest_rsi = TALIB_MAX(rsi, nb_period_stoch);
-    std::vector<float> lowest_rsi = TALIB_MIN(rsi, nb_period_stoch);
-
-    for (uint i = 0; i < rsi.size(); i++)
-    {
-        float val = (rsi[i] - lowest_rsi[i]) / (highest_rsi[i] - lowest_rsi[i]);
-        if (std::isnan(val) || std::isinf(val))
-        {
-            val = 0.0;
-        }
-        stochrsi.push_back(std::round(val * 1000.0) / 1000.0);
-    }
-
-    return TALIB_SMA(TALIB_SMA(stochrsi, nb_period_k), nb_period_d);
+    return TALIB_SMA(TALIB_SMA(stoch_rsi_raw(vals, nb_period_stoch, nb_period_rsi), nb_period_k), nb_period_d);
 }
 
 //////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////

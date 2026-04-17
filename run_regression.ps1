@@ -73,20 +73,47 @@ if (-not (Test-Path (Join-Path $RepoRoot "talib\talib_install\lib\libta_lib.so")
     throw "Expected TA-Lib at talib/talib_install/lib/libta_lib.so. Extract/build TA-Lib first."
 }
 
-Invoke-Bash "cd '$LinuxRepoRoot' && g++ -Ofast -I./talib/talib_install/include ./custom_talib_wrapper.cpp ./tools.cpp ./verification_regression.cpp -L./talib/talib_install/lib -Wl,-rpath,./talib/talib_install/lib -lta_lib -lpthread -o ./verification_regression.exe"
-Invoke-Bash "cd '$LinuxRepoRoot' && g++ -Ofast -I./talib/talib_install/include ./custom_talib_wrapper.cpp ./tools.cpp ./backtest_double_EMA_float.cpp -L./talib/talib_install/lib -Wl,-rpath,./talib/talib_install/lib -lta_lib -lpthread -o ./backtest_double_EMA_float.exe"
-Invoke-Bash "cd '$LinuxRepoRoot' && g++ -Ofast -I./talib/talib_install/include ./custom_talib_wrapper.cpp ./tools.cpp ./trade_core.cpp ./backtest_double_EMA_StochRSI_float_muti_pair.cpp -L./talib/talib_install/lib -Wl,-rpath,./talib/talib_install/lib -lta_lib -lpthread -o ./backtest_double_EMA_StochRSI_float_muti_pair.exe"
-Invoke-Bash "cd '$LinuxRepoRoot' && g++ -Ofast -I./talib/talib_install/include ./custom_talib_wrapper.cpp ./tools.cpp ./trade_core.cpp ./BigWill.cpp -L./talib/talib_install/lib -Wl,-rpath,./talib/talib_install/lib -lta_lib -lpthread -o ./BigWill.exe"
-Invoke-Bash "cd '$LinuxRepoRoot' && g++ -Ofast -I./talib/talib_install/include ./custom_talib_wrapper.cpp ./tools.cpp ./trade_core.cpp ./F_BigWill.cpp -L./talib/talib_install/lib -Wl,-rpath,./talib/talib_install/lib -lta_lib -lpthread -o ./F_BigWill.exe"
-Invoke-Bash "cd '$LinuxRepoRoot' && g++ -Ofast -I./talib/talib_install/include ./custom_talib_wrapper.cpp ./tools.cpp ./trade_core.cpp ./BBTREND.cpp -L./talib/talib_install/lib -Wl,-rpath,./talib/talib_install/lib -lta_lib -lpthread -o ./BBTREND.exe"
-Invoke-Bash "cd '$LinuxRepoRoot' && g++ -Ofast -I./talib/talib_install/include ./custom_talib_wrapper.cpp ./tools.cpp ./trade_core.cpp ./F_BBTREND.cpp -L./talib/talib_install/lib -Wl,-rpath,./talib/talib_install/lib -lta_lib -lpthread -o ./F_BBTREND.exe"
-Invoke-Bash "cd '$LinuxRepoRoot' && g++ -Ofast -I./talib/talib_install/include ./custom_talib_wrapper.cpp ./tools.cpp ./trade_core.cpp ./backtest_TRIX_multi_pair.cpp -L./talib/talib_install/lib -Wl,-rpath,./talib/talib_install/lib -lta_lib -lpthread -o ./backtest_TRIX_multi_pair.exe"
-Invoke-Bash "cd '$LinuxRepoRoot' && g++ -Ofast -I./talib/talib_install/include ./custom_talib_wrapper.cpp ./tools.cpp ./trade_core.cpp ./SuperReversal_mtf.cpp -L./talib/talib_install/lib -Wl,-rpath,./talib/talib_install/lib -lta_lib -lpthread -o ./SuperReversal_mtf.exe"
-Invoke-Bash "cd '$LinuxRepoRoot' && g++ -Ofast -I./talib/talib_install/include ./custom_talib_wrapper.cpp ./tools.cpp ./trade_core.cpp ./F_SuperReversal_mtf.cpp -L./talib/talib_install/lib -Wl,-rpath,./talib/talib_install/lib -lta_lib -lpthread -o ./F_SuperReversal_mtf.exe"
-Invoke-Bash "cd '$LinuxRepoRoot' && g++ -Ofast -I./talib/talib_install/include ./custom_talib_wrapper.cpp ./tools.cpp ./trade_core.cpp ./SuperTrend_EMA_ATR.cpp -L./talib/talib_install/lib -Wl,-rpath,./talib/talib_install/lib -lta_lib -lpthread -o ./SuperTrend_EMA_ATR.exe"
-Invoke-Bash "cd '$LinuxRepoRoot' && g++ -Ofast -I./talib/talib_install/include ./custom_talib_wrapper.cpp ./tools.cpp ./trade_core.cpp ./3EMA_SRSI_ATR.cpp -L./talib/talib_install/lib -Wl,-rpath,./talib/talib_install/lib -lta_lib -o ./3EMA_SRSI_ATR.exe"
-Invoke-Bash "cd '$LinuxRepoRoot' && g++ -Ofast -I./talib/talib_install/include ./custom_talib_wrapper.cpp ./tools.cpp ./trade_core.cpp ./F_3EMA_SRSI_ATR.cpp -L./talib/talib_install/lib -Wl,-rpath,./talib/talib_install/lib -lta_lib -lpthread -o ./F_3EMA_SRSI_ATR.exe"
-Invoke-Bash "cd '$LinuxRepoRoot' && g++ -Ofast -I./talib/talib_install/include ./custom_talib_wrapper.cpp ./tools.cpp ./trade_core.cpp ./strategy_regression.cpp -L./talib/talib_install/lib -Wl,-rpath,./talib/talib_install/lib -lta_lib -lpthread -o ./strategy_regression.exe"
+# Keep the build flags here in sync with Makefile's CXXFLAGS_OPT. We still invoke g++
+# directly via WSL so a missing make or stale build state doesn't mask real failures.
+$CXXFLAGS = "-O3 -fno-trapping-math -Wall -Wextra -Wno-unused-parameter -Wno-sign-compare"
+$COMMON   = "./custom_talib_wrapper.cpp ./tools.cpp ./trade_core.cpp"
+$TALIB    = "-I./talib/talib_install/include -L./talib/talib_install/lib -Wl,-rpath,./talib/talib_install/lib -lta_lib -lpthread"
+
+function Build-Target {
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$Source,
+        [Parameter(Mandatory = $true)]
+        [string]$Output
+    )
+    Invoke-Bash "cd '$LinuxRepoRoot' && g++ $CXXFLAGS -I./talib/talib_install/include $COMMON ./$Source -L./talib/talib_install/lib -Wl,-rpath,./talib/talib_install/lib -lta_lib -lpthread -o ./$Output"
+}
+
+# Tests first: fastest failure surface, no data-file dependency.
+Build-Target -Source "tests.cpp" -Output "tests.exe"
+Invoke-Bash "cd '$LinuxRepoRoot' && ./tests.exe"
+
+# Regression drivers + all strategy binaries.
+$AllSources = @(
+    "verification_regression.cpp",
+    "backtest_double_EMA_float.cpp",
+    "backtest_double_EMA_StochRSI_float_muti_pair.cpp",
+    "BigWill.cpp",
+    "F_BigWill.cpp",
+    "BBTREND.cpp",
+    "F_BBTREND.cpp",
+    "backtest_TRIX_multi_pair.cpp",
+    "SuperReversal_mtf.cpp",
+    "F_SuperReversal_mtf.cpp",
+    "SuperTrend_EMA_ATR.cpp",
+    "3EMA_SRSI_ATR.cpp",
+    "F_3EMA_SRSI_ATR.cpp",
+    "strategy_regression.cpp"
+)
+foreach ($src in $AllSources) {
+    $exe = [IO.Path]::ChangeExtension($src, ".exe")
+    Build-Target -Source $src -Output $exe
+}
 
 $VerificationOutput = Join-Path $TempDir "verification_regression.txt"
 $BacktestOutput = Join-Path $TempDir "backtest_double_EMA_float.txt"
@@ -121,17 +148,11 @@ $StrategyRegressionActual = Get-Content $StrategyRegressionOutput | ForEach-Obje
 $StrategyRegressionExpected = Get-Content (Join-Path $RepoRoot "regression_expected\strategy_regression.expected.txt")
 Assert-LinesEqual -Actual $StrategyRegressionActual -Expected $StrategyRegressionExpected -Label "strategy_regression"
 
+Write-Host "tests: OK"
 Write-Host "verification_regression: OK"
 Write-Host "backtest_double_EMA_float: OK"
 Write-Host "strategy_regression: OK"
-Write-Host "backtest_double_EMA_StochRSI_float_muti_pair build: OK"
-Write-Host "BigWill build: OK"
-Write-Host "F_BigWill build: OK"
-Write-Host "BBTREND build: OK"
-Write-Host "F_BBTREND build: OK"
-Write-Host "backtest_TRIX_multi_pair build: OK"
-Write-Host "SuperReversal_mtf build: OK"
-Write-Host "F_SuperReversal_mtf build: OK"
-Write-Host "SuperTrend_EMA_ATR build: OK"
-Write-Host "3EMA_SRSI_ATR build: OK"
-Write-Host "F_3EMA_SRSI_ATR build: OK"
+foreach ($src in $AllSources) {
+    $exe = [IO.Path]::ChangeExtension($src, ".exe")
+    Write-Host "$exe build: OK"
+}

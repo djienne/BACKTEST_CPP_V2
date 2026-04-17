@@ -1,5 +1,10 @@
 #include "tools.hh"
 
+#include <cassert>
+#include <numeric>
+
+using json = nlohmann::json;
+
 namespace
 {
 bool parse_kline_csv_row(const std::string &line, long int &ts, float &op, float &hi, float &lo, float &cl, float &vol)
@@ -12,59 +17,45 @@ bool parse_kline_csv_row(const std::string &line, long int &ts, float &op, float
 
 float find_average(const std::vector<float> &vec)
 {
-    float summ = 0.0;
-    for (const float &val : vec)
+    if (vec.empty())
     {
-        summ += val;
+        return 0.0f;
     }
-    return summ / float(vec.size());
+    return std::accumulate(vec.begin(), vec.end(), 0.0f) / static_cast<float>(vec.size());
 }
 
 //////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 
 float find_min(const std::vector<float> &vec)
 {
-    float min_val = std::numeric_limits<float>::max();
-
-    for (const float val : vec)
+    if (vec.empty())
     {
-        if (val < min_val)
-        {
-            min_val = val;
-        }
+        return std::numeric_limits<float>::max();
     }
-    return min_val;
+    return *std::min_element(vec.begin(), vec.end());
 }
 
 //////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 
+// Note: returns lowest() for an empty vector and so correctly handles all-negative inputs (prior
+// versions initialized the running max with 0 and silently masked negative-only data).
 float find_max(const std::vector<float> &vec)
 {
-    float max_val = 0.0;
-
-    for (const float val : vec)
+    if (vec.empty())
     {
-        if (val > max_val)
-        {
-            max_val = val;
-        }
+        return std::numeric_limits<float>::lowest();
     }
-    return max_val;
+    return *std::max_element(vec.begin(), vec.end());
 }
 //////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 
 int find_max(const std::vector<int> &vec)
 {
-    int max_val = 0.0;
-
-    for (const int val : vec)
+    if (vec.empty())
     {
-        if (val > max_val)
-        {
-            max_val = val;
-        }
+        return std::numeric_limits<int>::lowest();
     }
-    return max_val;
+    return *std::max_element(vec.begin(), vec.end());
 }
 //////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 
@@ -156,37 +147,32 @@ double process_mem_usage()
 
 //////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 
+// Half-open: [min, max) with custom step. Intentionally different endpoint than the
+// two-arg overload below; changing this would shift every existing parameter sweep.
 std::vector<int> integer_range(const int min, const int max, const int step)
 {
+    assert(min <= max);
+    assert(step > 0);
     std::vector<int> the_range;
-
-    if (min > max)
-    {
-        std::abort();
-    }
-
-    for (int i = min; i <= max - 1; i = i + step)
+    the_range.reserve(static_cast<size_t>((max - min + step - 1) / step));
+    for (int i = min; i < max; i += step)
     {
         the_range.push_back(i);
     }
-
     return the_range;
 }
 
+// Closed: [min, max] with step 1. Kept distinct from the three-arg overload above for
+// backwards compatibility with existing sweeps.
 std::vector<int> integer_range(const int min, const int max)
 {
+    assert(min <= max);
     std::vector<int> the_range;
-
-    if (min > max)
-    {
-        std::abort();
-    }
-
+    the_range.reserve(static_cast<size_t>(max - min + 1));
     for (int i = min; i <= max; i++)
     {
         the_range.push_back(i);
     }
-
     return the_range;
 }
 
@@ -194,15 +180,20 @@ std::vector<int> integer_range(const int min, const int max)
 
 std::vector<float> float_Nvalues_range(const float &vmin, const float &vmax, const int &N)
 {
+    assert(N >= 1);
     std::vector<float> result;
-    const float step = (vmax - vmin) / (float(N) - 1.0); // Calculate the step size
-
-    for (int i = 0; i < N; i++)
+    result.reserve(static_cast<size_t>(N));
+    if (N == 1)
     {
-        const float value = vmin + step * i;
-        result.push_back(value);
+        result.push_back(vmin);
+        return result;
     }
 
+    const float step = (vmax - vmin) / (float(N) - 1.0f);
+    for (int i = 0; i < N; i++)
+    {
+        result.push_back(vmin + step * i);
+    }
     return result;
 }
 
@@ -260,8 +251,6 @@ float calculate_calmar_ratio(const std::vector<int> &times, const std::vector<fl
     {
         yearly_pc_changes.push_back((vals_begin_years[iy] - vals_begin_years[iy - 1]) / vals_begin_years[iy - 1] * 100.0f);
     }
-
-    // yearly_pc_changes.erase(yearly_pc_changes.begin()); // could remove first and/or lost because the year is not complete
 
     yearly_pc_changes[0] = yearly_pc_changes[0] * factor_first_year;
     yearly_pc_changes[yearly_pc_changes.size() - 1] = yearly_pc_changes[yearly_pc_changes.size() - 1] * factor_last_year;
@@ -342,8 +331,7 @@ double read_score(const std::string &out_filename)
 
     if (!file.is_open())
     {
-        std::cout << "Failed to open the file." << std::endl;
-        std::abort();
+        BACKTEST_FATAL("Failed to open score file: " + out_filename);
     }
 
     std::regex scoreRegex(R"(Score\s*:\s*([+-]?\d*\.?\d+))");
@@ -430,20 +418,6 @@ void WRITE_OR_UPDATE_BEST_SCORE_FILE(const std::string &STRAT_NAME, const std::s
 
 //////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 
-// bool check_timestamp_alignement(const std::vector<uint> &timestamp1, const std::vector<uint> &timestamp2, const int nb_to_test)
-// {
-
-//     auto lastVals_vec1 = timestamp1.rbegin() + nb_to_test;
-//     auto lastVals_vec2 = timestamp2.rbegin() + nb_to_test;
-//     auto lastVals_end_vec1 = timestamp1.rend();
-//     auto lastVals_end_vec2 = timestamp2.rend();
-
-//     // Compare the subranges
-//     return std::equal(lastVals_vec1, lastVals_end_vec1, lastVals_vec2, lastVals_end_vec2);
-// }
-
-//////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
-
 bool check_if_necessary(const KLINEf &klines_btc, const KLINEf &klines2)
 {
     bool result = false;
@@ -484,7 +458,7 @@ bool check_timestamp_consistencies(const std::vector<KLINEf> &PAIRS)
                 std::cout << PAIRS[0].timestamp[j] << " " << PAIRS[i].timestamp[j] << " " << PAIRS[0].timestamp[j] - PAIRS[i].timestamp[j] << std::endl;
             }
 
-            std::abort();
+            BACKTEST_FATAL("Inconsistent timestamps between " + PAIRS[0].name + " and " + PAIRS[i].name);
         }
     }
 
@@ -527,8 +501,7 @@ void realign_timestamps(const KLINEf &klines_btc, KLINEf &klines2) // klines2 wi
         const auto match = timestamp_to_index.find(klines_btc.timestamp[i]);
         if (match == timestamp_to_index.end())
         {
-            std::cout << "Problem with re-aligningment." << std::endl;
-            std::abort();
+            BACKTEST_FATAL("realign_timestamps: no match for timestamp in " + klines2.name);
         }
 
         const uint j = match->second;
@@ -591,10 +564,7 @@ std::vector<uint> INITIALIZE_DATA(std::vector<KLINEf> &PAIRS)
             {
                 break;
             }
-            else
-            {
-                std::abort();
-            }
+            BACKTEST_FATAL("INITIALIZE_DATA: could not find start index for pair " + PAIRS[ic].name);
         }
     }
 
@@ -627,15 +597,13 @@ std::vector<uint> INITIALIZE_DATA(std::vector<KLINEf> &PAIRS)
     {
         if (PAIRS[ic].nb != PAIRS[0].open.size() || PAIRS[ic].open.size() != PAIRS[0].open.size())
         {
-            std::cout << "ERROR: inconsistent size" << std::endl;
-            std::abort();
+            BACKTEST_FATAL("INITIALIZE_DATA: inconsistent size for pair " + PAIRS[ic].name);
         }
     }
 
     if (!check_timestamp_consistencies(PAIRS))
     {
-        std::cout << "Last Timestamps are not consistent" << std::endl;
-        std::abort();
+        BACKTEST_FATAL("Last timestamps are not consistent after realignment");
     }
 
     std::cout << "Initialized calculations." << std::endl;
@@ -652,8 +620,7 @@ KLINEf read_input_data(const std::string &input_file_path)
     std::ifstream myfile(input_file_path);
     if (!myfile.is_open())
     {
-        std::cout << "Failed to open data file: " << input_file_path << std::endl;
-        std::abort();
+        BACKTEST_FATAL("Failed to open CSV data file: " + input_file_path);
     }
 
     std::string line;
@@ -678,8 +645,7 @@ KLINEf read_input_data(const std::string &input_file_path)
 
         if (!parse_kline_csv_row(line, ts, op, hi, lo, cl, vol))
         {
-            std::cout << "Malformed CSV row in " << input_file_path << " at data row " << nb_read + 1 << std::endl;
-            std::abort();
+            BACKTEST_FATAL("Malformed CSV row in " + input_file_path + " at data row " + std::to_string(nb_read + 1));
         }
 
         if (previous_ts == ts)
@@ -712,25 +678,6 @@ KLINEf read_input_data(const std::string &input_file_path)
 }
 
 //////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
-std::string readFileToString(const std::string &filename)
-{
-    std::ifstream file(filename);
-    if (!file.is_open())
-    {
-        std::cerr << "Failed to open file: " << filename << std::endl;
-        return "";
-    }
-
-    std::string content;
-    std::string line;
-    while (std::getline(file, line))
-    {
-        content += line;
-    }
-
-    file.close();
-    return content;
-}
 
 KLINEf read_input_data_f(const std::string &input_file_path, const std::string &max_time)
 {
@@ -743,9 +690,12 @@ KLINEf read_input_data_f(const std::string &input_file_path, const std::string &
     long int previous_ts = 0;
     int nb_read = 0;
 
-    std::string jsonStr = readFileToString(input_file_path);
-
-    const json jsonData = json::parse(jsonStr);
+    std::ifstream jsonFile(input_file_path);
+    if (!jsonFile.is_open())
+    {
+        BACKTEST_FATAL("Failed to open JSON data file: " + input_file_path);
+    }
+    const json jsonData = json::parse(jsonFile);
     kline.timestamp.reserve(jsonData.size());
     kline.open.reserve(jsonData.size());
     kline.high.reserve(jsonData.size());
@@ -804,13 +754,16 @@ fundings read_funding_rates_data(const std::string &input_file_path)
     fundings FR{};
 
     long int ts;
-    float op, fu;
+    float fu;
     long int previous_ts = 0;
     int nb_read = 0;
 
-    std::string jsonStr = readFileToString(input_file_path);
-
-    const json jsonData = json::parse(jsonStr);
+    std::ifstream jsonFile(input_file_path);
+    if (!jsonFile.is_open())
+    {
+        BACKTEST_FATAL("Failed to open JSON data file: " + input_file_path);
+    }
+    const json jsonData = json::parse(jsonFile);
     FR.timestamp.reserve(jsonData.size());
     FR.funding.reserve(jsonData.size());
     FR.funding_by_timestamp.reserve(jsonData.size());

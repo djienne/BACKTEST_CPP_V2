@@ -201,8 +201,6 @@ RUN_RESULTf PROCESS(std::vector<KLINEf> &df, const std::vector<fundings> &FUNDIN
     result.calmar_ratio = calculate_calmar_ratio(wallet_trace.timestamps, wallet_trace.wallet_values, metrics.ddc);
     result.ema1 = ema_fast;
     result.ema2 = ema_slow;
-    result.AO_fast = ema_fast;
-    result.AO_slow = ema_slow;
     result.param_str = "\n  EMA_f: " + std::to_string(ema_fast) +
                        " ; EMA_s: " + std::to_string(ema_slow) +
                        " ; AO_f: " + std::to_string(AO_fast) +

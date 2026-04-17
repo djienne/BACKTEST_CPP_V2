@@ -1,5 +1,14 @@
 #pragma once
 #include <stdio.h>
+// Loud abort with context. Use at unrecoverable failure points in loaders, alignment,
+// etc. — preserves the existing "crash hard" semantics but surfaces the reason before
+// std::abort() instead of dumping a bare exit code.
+#define BACKTEST_FATAL(msg)                                                                             \
+    do                                                                                                  \
+    {                                                                                                   \
+        std::cerr << "FATAL " << __FILE__ << ":" << __LINE__ << " " << (msg) << std::endl;              \
+        std::abort();                                                                                   \
+    } while (0)
 #include <vector>
 #include <array>
 #include <time.h>
@@ -21,9 +30,6 @@
 #include <optional>
 #include "nlohmann/json.hpp"
 #include "Klinef.hh"
-using json = nlohmann::json;
-using namespace std::chrono;
-using namespace std;
 //////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 constexpr const char *RESET = "\033[0m";
 constexpr const char *RED = "\033[31m";
@@ -36,41 +42,24 @@ constexpr const char *WHITE = "\033[37m";
 constexpr const char *GREY = "\033[90m";
 //////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 
+// Strategy-agnostic run result. New strategies should stash their parameters in
+// `param_str` instead of adding numeric fields here. `ema1`/`ema2` remain because the
+// 2-EMA strategy reads them to display a compact legacy banner.
 struct RUN_RESULTf
 {
-    float WALLET_VAL_USDT;
-    float gain_pc;
-    float win_rate;
-    float max_DD;
-    float gain_over_DDC;
-    float score;
-    int nb_posi_entered;
-    int ema1;
-    int ema2;
-    int ema3;
-    int ema4;
-    int AO_fast;
-    int AO_slow;
-    int trixLength;
-    int trixSignal;
-    float UP;
-    float DOWN;
-    float min_yearly_gain;
-    float max_yearly_gain;
-    std::vector<float> yearly_gains;
-    std::vector<float> years_yearly_gains;
-    float RSI_limit;
-    float RSI_limit2;
-    float gain_limit;
-    float up;
-    float down;
-    float SRSIL;
-    float total_fees_paid;
-    int max_delta_t_new_ATH;
-    float calmar_ratio;
-    float calmar_ratio_monthly;
-    uint max_open_trades;
-    float AMOUNT_USDT;
+    float WALLET_VAL_USDT = 0.0f;
+    float gain_pc = 0.0f;
+    float win_rate = 0.0f;
+    float max_DD = 0.0f;
+    float gain_over_DDC = 0.0f;
+    float score = 0.0f;
+    int nb_posi_entered = 0;
+    int ema1 = 0;
+    int ema2 = 0;
+    float total_fees_paid = 0.0f;
+    float calmar_ratio = 0.0f;
+    float calmar_ratio_monthly = 0.0f;
+    uint max_open_trades = 0;
     std::string param_str;
 };
 

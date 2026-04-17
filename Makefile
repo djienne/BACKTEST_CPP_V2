@@ -1,44 +1,58 @@
-default: backtest_double_EMA_float.cpp tools.cpp custom_talib_wrapper.cpp custom_talib_wrapper.hh tools.hh 
-	${CXX} -Ofast -I./talib/talib_install/include/ ./custom_talib_wrapper.cpp ./tools.cpp ./backtest_double_EMA_float.cpp -L./talib/talib_install/lib -lta_lib -lpthread -o ./backtest_double_EMA_float.exe
+CXX ?= g++
 
-debug: backtest_double_EMA_float.cpp tools.cpp custom_talib_wrapper.cpp custom_talib_wrapper.hh tools.hh  
-	${CXX} -g -I./talib/talib_install/include/ ./custom_talib_wrapper.cpp ./tools.cpp ./backtest_double_EMA_float.cpp -L./talib/talib_install/lib -lta_lib -lpthread -o ./backtest_double_EMA_float.exe
+TALIB_INC := -I./talib/talib_install/include/
+TALIB_LIB := -L./talib/talib_install/lib -lta_lib -lpthread
 
-SR_mtf :  tools.cpp trade_core.cpp custom_talib_wrapper.cpp SuperReversal_mtf.cpp custom_talib_wrapper.hh tools.hh trade_core.hh
-	${CXX} -Ofast -I./talib/talib_install/include/ ./custom_talib_wrapper.cpp ./tools.cpp ./trade_core.cpp ./SuperReversal_mtf.cpp -L./talib/talib_install/lib -lta_lib -lpthread -o ./SuperReversal_mtf.exe
+# Using -O3 -fno-trapping-math instead of -Ofast: the backtester is numerics-sensitive
+# and -Ofast enables -ffast-math which silently re-associates float operations, which
+# invalidates the regression fixtures.
+CXXFLAGS_OPT := -O3 -fno-trapping-math -Wall -Wextra -Wno-unused-parameter -Wno-sign-compare
 
-F_SR_mtf :  tools.cpp trade_core.cpp custom_talib_wrapper.cpp F_SuperReversal_mtf.cpp custom_talib_wrapper.hh tools.hh trade_core.hh
-	${CXX} -Ofast -I./talib/talib_install/include/ ./custom_talib_wrapper.cpp ./tools.cpp ./trade_core.cpp ./F_SuperReversal_mtf.cpp -L./talib/talib_install/lib -lta_lib -lpthread -o ./F_SuperReversal_mtf.exe
+COMMON_SRC := ./custom_talib_wrapper.cpp ./tools.cpp ./trade_core.cpp
+COMMON_HDR := tools.hh trade_core.hh custom_talib_wrapper.hh Klinef.hh strategy_runner.hh
 
-trix_multi: tools.cpp trade_core.cpp custom_talib_wrapper.cpp backtest_TRIX_multi_pair.cpp custom_talib_wrapper.hh tools.hh trade_core.hh Klinef.hh
-	${CXX} -Ofast -I./talib/talib_install/include/ ./custom_talib_wrapper.cpp ./tools.cpp ./trade_core.cpp ./backtest_TRIX_multi_pair.cpp -L./talib/talib_install/lib -lta_lib -lpthread -o ./backtest_TRIX_multi_pair.exe
+STRATEGIES := \
+    backtest_double_EMA_float \
+    backtest_double_EMA_StochRSI_float_muti_pair \
+    BigWill F_BigWill \
+    BBTREND F_BBTREND \
+    SuperReversal_mtf F_SuperReversal_mtf \
+    SuperTrend_EMA_ATR \
+    3EMA_SRSI_ATR F_3EMA_SRSI_ATR \
+    backtest_TRIX_multi_pair
 
-BigWill: tools.cpp trade_core.cpp custom_talib_wrapper.cpp BigWill.cpp custom_talib_wrapper.hh tools.hh trade_core.hh
-	${CXX} -Ofast -I./talib/talib_install/include/ ./custom_talib_wrapper.cpp ./tools.cpp ./trade_core.cpp ./BigWill.cpp -L./talib/talib_install/lib -lta_lib -lpthread -o ./BigWill.exe
+REGRESSION := verification_regression strategy_regression
 
-F_BigWill: tools.cpp trade_core.cpp custom_talib_wrapper.cpp F_BigWill.cpp custom_talib_wrapper.hh tools.hh trade_core.hh
-	${CXX} -Ofast -ipo -I./talib/talib_install/include/ ./custom_talib_wrapper.cpp ./tools.cpp ./trade_core.cpp ./F_BigWill.cpp -L./talib/talib_install/lib -lta_lib -lpthread -o ./F_BigWill.exe
+.PHONY: default all tests clean
+default: backtest_double_EMA_float.exe
 
-EMA2SOTCHRSIMULTI: tools.cpp trade_core.cpp custom_talib_wrapper.cpp backtest_double_EMA_StochRSI_float_muti_pair.cpp custom_talib_wrapper.hh tools.hh trade_core.hh
-	${CXX} -Ofast -I./talib/talib_install/include/ ./custom_talib_wrapper.cpp ./tools.cpp ./trade_core.cpp ./backtest_double_EMA_StochRSI_float_muti_pair.cpp -L./talib/talib_install/lib -lta_lib -lpthread -o ./backtest_double_EMA_StochRSI_float_muti_pair.exe
+all: $(addsuffix .exe,$(STRATEGIES) $(REGRESSION)) tests.exe
 
-3EMASRSIATR: tools.cpp trade_core.cpp custom_talib_wrapper.cpp ./3EMA_SRSI_ATR.cpp tools.hh custom_talib_wrapper.hh trade_core.hh
-	${CXX} -Ofast -I./talib/talib_install/include/ ./custom_talib_wrapper.cpp ./tools.cpp ./trade_core.cpp ./3EMA_SRSI_ATR.cpp -L./talib/talib_install/lib -lta_lib -o ./3EMA_SRSI_ATR.exe
+%.exe: %.cpp $(COMMON_SRC) $(COMMON_HDR)
+	$(CXX) $(CXXFLAGS_OPT) $(TALIB_INC) $(COMMON_SRC) $< $(TALIB_LIB) -o $@
 
-F_3EMASRSIATR: tools.cpp trade_core.cpp custom_talib_wrapper.cpp ./F_3EMA_SRSI_ATR.cpp tools.hh custom_talib_wrapper.hh trade_core.hh
-	${CXX} -Ofast -I./talib/talib_install/include/ ./custom_talib_wrapper.cpp ./tools.cpp ./trade_core.cpp ./F_3EMA_SRSI_ATR.cpp -L./talib/talib_install/lib -lta_lib -lpthread -o ./F_3EMA_SRSI_ATR.exe
+tests: tests.exe
+tests.exe: tests.cpp $(COMMON_SRC) $(COMMON_HDR)
+	$(CXX) $(CXXFLAGS_OPT) $(TALIB_INC) $(COMMON_SRC) tests.cpp $(TALIB_LIB) -o tests.exe
 
-STEMAATR: tools.cpp trade_core.cpp custom_talib_wrapper.cpp SuperTrend_EMA_ATR.cpp custom_talib_wrapper.hh tools.hh trade_core.hh
-	${CXX} -Ofast -I./talib/talib_install/include/ ./custom_talib_wrapper.cpp ./tools.cpp ./trade_core.cpp ./SuperTrend_EMA_ATR.cpp -L./talib/talib_install/lib -lta_lib -lpthread -o ./SuperTrend_EMA_ATR.exe
+# Debug build of the default strategy.
+debug: backtest_double_EMA_float.cpp $(COMMON_SRC) $(COMMON_HDR)
+	$(CXX) -g -O0 $(TALIB_INC) $(COMMON_SRC) ./backtest_double_EMA_float.cpp $(TALIB_LIB) -o ./backtest_double_EMA_float.exe
 
-BBTREND: tools.cpp trade_core.cpp custom_talib_wrapper.cpp BBTREND.cpp custom_talib_wrapper.hh tools.hh trade_core.hh
-	${CXX} -Ofast -I./talib/talib_install/include/ ./custom_talib_wrapper.cpp ./tools.cpp ./trade_core.cpp ./BBTREND.cpp -L./talib/talib_install/lib -lta_lib -lpthread -o ./BBTREND.exe
+# Friendly single-strategy aliases kept so existing contributor muscle memory still works.
+SR_mtf: SuperReversal_mtf.exe
+F_SR_mtf: F_SuperReversal_mtf.exe
+trix_multi: backtest_TRIX_multi_pair.exe
+BigWill: BigWill.exe
+F_BigWill: F_BigWill.exe
+EMA2SOTCHRSIMULTI: backtest_double_EMA_StochRSI_float_muti_pair.exe
+3EMASRSIATR: 3EMA_SRSI_ATR.exe
+F_3EMASRSIATR: F_3EMA_SRSI_ATR.exe
+STEMAATR: SuperTrend_EMA_ATR.exe
+BBTREND: BBTREND.exe
+F_BBTREND: F_BBTREND.exe
+verification: verification_regression.exe
+strategy_regression: strategy_regression.exe
 
-F_BBTREND: tools.cpp trade_core.cpp custom_talib_wrapper.cpp F_BBTREND.cpp custom_talib_wrapper.hh tools.hh trade_core.hh
-	${CXX} -Ofast -I./talib/talib_install/include/ ./custom_talib_wrapper.cpp ./tools.cpp ./trade_core.cpp ./F_BBTREND.cpp -L./talib/talib_install/lib -lta_lib -lpthread -o ./F_BBTREND.exe
-
-verification: tools.cpp custom_talib_wrapper.cpp verification_regression.cpp custom_talib_wrapper.hh tools.hh Klinef.hh
-	${CXX} -Ofast -I./talib/talib_install/include/ ./custom_talib_wrapper.cpp ./tools.cpp ./verification_regression.cpp -L./talib/talib_install/lib -lta_lib -lpthread -o ./verification_regression.exe
-
-strategy_regression: tools.cpp trade_core.cpp custom_talib_wrapper.cpp strategy_regression.cpp custom_talib_wrapper.hh tools.hh trade_core.hh Klinef.hh
-	${CXX} -Ofast -I./talib/talib_install/include/ ./custom_talib_wrapper.cpp ./tools.cpp ./trade_core.cpp ./strategy_regression.cpp -L./talib/talib_install/lib -lta_lib -lpthread -o ./strategy_regression.exe
+clean:
+	rm -f *.exe

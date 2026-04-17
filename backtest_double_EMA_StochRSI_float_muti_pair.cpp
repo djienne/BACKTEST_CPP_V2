@@ -10,6 +10,7 @@
 #include "tools.hh"
 #include "trade_core.hh"
 #include "custom_talib_wrapper.hh"
+#include "strategy_runner.hh"
 #include <ta-lib/ta_libc.h>
 using namespace std;
 using uint = unsigned int;
@@ -35,44 +36,16 @@ const float STOCH_RSI_LOWER = 0.200;
 
 std::vector<uint> start_indexes{};
 
-// RANGE OF EMA PERIDOS TO TESTs
+// RANGE OF EMA PERIODS TO TEST
 const int period_max_EMA = 600;
-// const int range_step = 2;
-// vector<int> range_EMA = {180};
 vector<int> range_EMA_short = integer_range(2, 300 + 4, 1);
 vector<int> range_EMA_long = integer_range(70, period_max_EMA + 4, 1);
 //////////////////////////
 array<std::unordered_map<string, vector<float>>, NB_PAIRS> EMA_LISTS{};
 array<vector<float>, NB_PAIRS> StochRSI{};
-
 array<long int, NB_PAIRS> last_times{};
 
-uint i_print = 0;
 uint nb_tested = 0;
-
-RUN_RESULTf best{};
-
-//////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
-
-void print_best_res(const RUN_RESULTf &bestt)
-{
-    std::cout << "\n--------------------------------------------------------------------------" << std::endl;
-    std::cout << "BEST PARAMETER SET FOUND: " << std::endl;
-    std::cout << "-------------------------------------------------------------------------" << std::endl;
-    std::cout << "Time             : " << GREY << GET_CURRENT_TIME_STR() << RESET << std::endl;
-    std::cout << "Strategy         : " << BLUE << STRAT_NAME << RESET << std::endl;
-    std::cout << "Parameters       : " << YELLOW << bestt.param_str << RESET << std::endl;
-    std::cout << "Gain             : " << bestt.gain_pc << "%" << std::endl;
-    std::cout << "Porfolio         : " << bestt.WALLET_VAL_USDT << "$ (started with 1000$)" << std::endl;
-    std::cout << "Win rate         : " << bestt.win_rate << "%" << std::endl;
-    std::cout << "max DD           : " << bestt.max_DD << "%" << std::endl;
-    std::cout << "Gain/DDC         : " << bestt.gain_over_DDC << std::endl;
-    std::cout << "Score            : " << GREEN << bestt.score << RESET << std::endl;
-    std::cout << "Calmar ratio     : " << bestt.calmar_ratio << std::endl;
-    std::cout << "Number of trades : " << bestt.nb_posi_entered << std::endl;
-    std::cout << "Total fees paid  : " << round(bestt.total_fees_paid * 100.0f) / 100.0f << "$ (started with 1000$)" << std::endl;
-    std::cout << "-------------------------------------------------------------------------" << std::endl;
-}
 
 //////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 
@@ -146,8 +119,6 @@ RUN_RESULTf PROCESS(const vector<KLINEf> &PAIRS, const int ema_s, const int ema_
 
     const trade_core::ResultMetrics metrics = trade_core::calculate_result_metrics(WALLET_VAL_USDT, USDT_amount_initial, portfolio.max_drawdown, stats);
 
-    i_print++;
-
     result.param_str = "\n  EMA_short: " + std::to_string(ema_s) + " ; EMA_long: " + std::to_string(ema_l) +
                        "\n  STOCH_RSI_LOWER: " + std::to_string(STOCH_RSI_LOWER) + " ; STOCH_RSI_UPPER: " + std::to_string(STOCH_RSI_UPPER);
     trade_core::populate_common_result(result, metrics, WALLET_VAL_USDT, portfolio.max_drawdown, portfolio.total_fees_paid_usdt, stats, NB_POSITION_MAX);
@@ -192,25 +163,7 @@ void CALCULATE_INDICATORS(std::vector<KLINEf> &PAIRS)
 int main()
 {
     const double t_begin = get_wall_time();
-    std::cout << "\n-------------------------------------------------------------------------" << std::endl;
-    std::cout << "Strategy to test : " << BLUE << STRAT_NAME << RESET << std::endl;
-    std::cout << "DATA FILES TO PROCESS: " << std::endl;
-    for (const string &dataf : DATAFILES)
-    {
-        std::cout << " " << YELLOW << "  " << dataf << RESET << std::endl;
-    }
-
-    TA_RetCode retCode;
-    retCode = TA_Initialize();
-    if (retCode != TA_SUCCESS)
-    {
-        std::cout << "Cannot initialize TA-Lib !\n"
-                  << retCode << "\n";
-    }
-    else
-    {
-        std::cout << "Initialized TA-Lib !\n";
-    }
+    strategy_runner::init_talib();
 
     vector<KLINEf> PAIRS;
     PAIRS.reserve(NB_PAIRS);
@@ -221,96 +174,39 @@ int main()
 
     random_shuffle_vector(range_EMA_long);
 
-    start_indexes = INITIALIZE_DATA(PAIRS); // this function modifies PAIRS
+    start_indexes = INITIALIZE_DATA(PAIRS);
     CALCULATE_INDICATORS(PAIRS);
 
-    best.gain_over_DDC = -100.0f;
-    best.calmar_ratio = -100.0f;
-    best.score = -100.0f;
-
-    const uint last_idx = PAIRS[0].nb - 1;
-
-    const int year = get_year_from_timestamp(PAIRS[0].timestamp[0]);
-    const int month = get_month_from_timestamp(PAIRS[0].timestamp[0]);
-    const int day = get_day_from_timestamp(PAIRS[0].timestamp[0]);
-
-    const int last_year = get_year_from_timestamp(PAIRS[0].timestamp[last_idx]);
-    const int last_month = get_month_from_timestamp(PAIRS[0].timestamp[last_idx]);
-    const int last_day = get_day_from_timestamp(PAIRS[0].timestamp[last_idx]);
-
-    std::time_t difference = std::abs(int(PAIRS[0].timestamp[last_idx]) - int(PAIRS[0].timestamp[0]));
-    const int days = difference / (24 * 60 * 60);
-
-    // Display info
-    std::cout << "Begin day                         : " << year << "/" << month << "/" << day << std::endl;
-    std::cout << "End day                           : " << last_year << "/" << last_month << "/" << last_day << std::endl;
-    std::cout << "Number of days                    : " << YELLOW << days << RESET << std::endl;
-    std::cout << "OPEN/CLOSE FEE                    : " << FEE << " %" << std::endl;
+    strategy_runner::print_banner(STRAT_NAME, DATAFILES, PAIRS[0], FEE, MIN_NUMBER_OF_TRADES, MIN_ALLOWED_MAX_DRAWBACK);
     std::cout << "Maximum number open trades        : " << NB_POSITION_MAX << std::endl;
-    std::cout << "Minimum number of trades required : " << MIN_NUMBER_OF_TRADES << std::endl;
-    std::cout << "Maximum drawdown allowed          : " << MIN_ALLOWED_MAX_DRAWBACK << " %" << std::endl;
     std::cout << "StochRSI Upper Band               : " << STOCH_RSI_UPPER << std::endl;
     std::cout << "StochRSI Lower Band               : " << STOCH_RSI_LOWER << std::endl;
     std::cout << "EMA short period max tested       : " << find_max(range_EMA_short) << std::endl;
     std::cout << "EMA long period max tested        : " << find_max(range_EMA_long) << std::endl;
-    std::cout << "-------------------------------------------------------------------------" << std::endl;
 
     std::vector<doubleEMA_params> param_list{};
     param_list.reserve(range_EMA_short.size() * range_EMA_long.size());
-
     for (const int ema1 : range_EMA_long)
     {
         for (const int ema2 : range_EMA_short)
         {
-            if (std::abs(ema1 - ema2) < 5)
-                continue;
-
-            const doubleEMA_params to_add{ema1, ema2};
-
-            param_list.push_back(to_add);
+            if (std::abs(ema1 - ema2) < 5) continue;
+            param_list.push_back({ema1, ema2});
         }
     }
 
-    random_shuffle_vector(param_list);
+    strategy_runner::SweepConfig cfg;
+    cfg.strategy_name = STRAT_NAME;
+    cfg.out_filename = out_filename;
+    cfg.min_trades = MIN_NUMBER_OF_TRADES;
+    cfg.min_dd = MIN_ALLOWED_MAX_DRAWBACK;
+    cfg.print_every = 1000;
 
-    // MAIN LOOP
+    strategy_runner::sweep(cfg, param_list, [&](const doubleEMA_params &p) {
+        return PROCESS(PAIRS, p.ema1, p.ema2);
+    });
 
-    uint nb_done = 0;
-    uint i_print3 = 0;
-
-    for (const auto para : param_list)
-    {
-        const RUN_RESULTf res = PROCESS(PAIRS, para.ema1, para.ema2);
-        nb_done++;
-        i_print3++;
-
-        if (res.score > best.score && res.gain_pc < 1000000.0f && res.nb_posi_entered >= MIN_NUMBER_OF_TRADES && res.max_DD > MIN_ALLOWED_MAX_DRAWBACK)
-        {
-            best = res;
-        }
-
-        if (i_print3 == 1000)
-        {
-            print_best_res(best);
-            WRITE_OR_UPDATE_BEST_SCORE_FILE(STRAT_NAME, out_filename, best);
-            i_print3 = 0;
-            const double pc_done = std::round(double(nb_done) / double(param_list.size()) * 100.0 * 100.0) / 100.0;
-            std::cout << "DONE " << nb_done << " / " << param_list.size() << "   = " << pc_done << "%" << std::endl;
-        }
-    }
-
-    print_best_res(best);
-    WRITE_OR_UPDATE_BEST_SCORE_FILE(STRAT_NAME, out_filename, best);
-
-    const double t_end = get_wall_time();
-
-    std::cout << "Number of backtests performed : " << nb_tested << std::endl;
-    std::cout << "Time taken                    : " << t_end - t_begin << " seconds " << std::endl;
-    const double ram_usage = process_mem_usage();
-    std::cout << "RAM usage                     : " << std::round(ram_usage * 10.0) / 10.0 << " MB" << std::endl;
-    std::cout << "-------------------------------------------------------------------------" << std::endl;
-
+    strategy_runner::print_timing_and_ram(t_begin, nb_tested);
     TA_Shutdown();
-
     return 0;
 }

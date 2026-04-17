@@ -10,6 +10,7 @@
 #include "tools.hh"
 #include "trade_core.hh"
 #include "custom_talib_wrapper.hh"
+#include "strategy_runner.hh"
 #include <ta-lib/ta_libc.h>
 using namespace std;
 using uint = unsigned int;
@@ -60,10 +61,7 @@ std::array<std::vector<float>, NB_PAIRS> StochRSI_K{};
 std::array<std::vector<float>, NB_PAIRS> StochRSI_D{};
 std::array<std::vector<float>, NB_PAIRS> ATR{};
 
-uint i_print = 0;
 uint nb_tested = 0;
-
-RUN_RESULTf best{};
 
 uint end_timestamp_datasets = 0;
 
@@ -77,27 +75,9 @@ void fill_datafile_paths()
     }
 }
 
-void print_best_res(const RUN_RESULTf &bestt)
-{
-    std::cout << "\n-------------------------------------------------------------------------" << std::endl;
-    std::cout << "BEST PARAMETER SET FOUND: " << std::endl;
-    std::cout << "-------------------------------------------------------------------------" << std::endl;
-    std::cout << "Time                 : " << GREY << GET_CURRENT_TIME_STR() << RESET << std::endl;
-    std::cout << "Strategy             : " << BLUE << STRAT_NAME << RESET << std::endl;
-    std::cout << "Parameters           : " << YELLOW << bestt.param_str << RESET << std::endl;
-    std::cout << "Max Open Trades      : " << YELLOW << bestt.max_open_trades << RESET << std::endl;
-    std::cout << "Gain                 : " << bestt.gain_pc << "%" << std::endl;
-    std::cout << "Porfolio             : " << bestt.WALLET_VAL_USDT << "$ (started with 1000$)" << std::endl;
-    std::cout << "Win rate             : " << bestt.win_rate << "%" << std::endl;
-    std::cout << "max DD               : " << bestt.max_DD << "%" << std::endl;
-    std::cout << "Gain/DDC             : " << bestt.gain_over_DDC << std::endl;
-    std::cout << "Score                : " << GREEN << bestt.score << RESET << std::endl;
-    std::cout << "Calmar ratio monthly : " << bestt.calmar_ratio_monthly << std::endl;
-    std::cout << "Calmar ratio         : " << bestt.calmar_ratio << std::endl;
-    std::cout << "Number of trades     : " << bestt.nb_posi_entered << std::endl;
-    std::cout << "Total fees paid      : " << round(bestt.total_fees_paid * 100.0f) / 100.0f << "$ (started with 1000$)" << std::endl;
-    std::cout << "-------------------------------------------------------------------------" << std::endl;
-}
+// Thin wrapper that defers to the shared printer (which now also shows
+// `Calmar ratio monthly` when non-zero).
+inline void print_best_res(const RUN_RESULTf &bestt) { strategy_runner::print_best_res(STRAT_NAME, bestt); }
 
 //////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 
@@ -211,22 +191,11 @@ RUN_RESULTf PROCESS(const std::vector<KLINEf> &PAIRS, const int &ema1, const int
 
     const trade_core::ResultMetrics metrics = trade_core::calculate_result_metrics(wallet_val_usdt, USDT_amount_initial, portfolio.max_drawdown, stats);
 
-    i_print++;
-    if (i_print == 11)
-    {
-        i_print = 0;
-        print_best_res(best);
-    }
-
     trade_core::populate_common_result(result, metrics, wallet_val_usdt, portfolio.max_drawdown, portfolio.total_fees_paid_usdt, stats, MAX_OPEN_TRADES);
     result.calmar_ratio_monthly = calculate_calmar_ratio_monthly(wallet_trace.timestamps, wallet_trace.wallet_values, metrics.ddc);
     result.calmar_ratio = calculate_calmar_ratio(wallet_trace.timestamps, wallet_trace.wallet_values, metrics.ddc);
     result.ema1 = ema1;
     result.ema2 = ema2;
-    result.ema3 = ema3;
-    result.up = up;
-    result.down = down;
-    result.SRSIL = STOCH_RSI_LOWER;
     result.param_str = "\n  EMA1: " + std::to_string(ema1) + " ; EMA2: " + std::to_string(ema2) + " ; EMA3: " + std::to_string(ema3) +
                        "\n  up: " + std::to_string(up) + " ; down: " + std::to_string(down) + " ; STOCH_RSI_LOWER: " + std::to_string(STOCH_RSI_LOWER);
 
@@ -262,28 +231,9 @@ void CALCULATE_SOME_INDICATORS(const std::vector<KLINEf> &PAIRS)
 int main()
 {
     const double t_begin = get_wall_time();
-    std::cout << "\n-------------------------------------------------------------------------" << endl;
-    std::cout << "Strategy to test: " << BLUE << STRAT_NAME << RESET << endl;
-    std::cout << "DATA FILES TO PROCESS: " << endl;
+    strategy_runner::init_talib();
 
     fill_datafile_paths();
-
-    for (const string &dataf : DATAFILES)
-    {
-        std::cout << YELLOW << "  " << dataf << RESET << endl;
-    }
-
-    TA_RetCode retCode;
-    retCode = TA_Initialize();
-    if (retCode != TA_SUCCESS)
-    {
-        std::cout << "Cannot initialize TA-Lib !\n"
-                  << retCode << "\n";
-    }
-    else
-    {
-        std::cout << "Initialized TA-Lib !\n";
-    }
 
     std::vector<KLINEf> PAIRS;
     PAIRS.reserve(NB_PAIRS);
@@ -292,41 +242,23 @@ int main()
         PAIRS.push_back(read_input_data(dataf));
     }
 
-    start_indexes = INITIALIZE_DATA(PAIRS); // this function modifies PAIRS
+    start_indexes = INITIALIZE_DATA(PAIRS);
     CALCULATE_SOME_INDICATORS(PAIRS);
 
+    RUN_RESULTf best{};
     best.gain_over_DDC = -100.0f;
     best.calmar_ratio = -100.0f;
     best.calmar_ratio_monthly = -100.0f;
     best.score = -100.0f;
 
-    const uint last_idx = PAIRS[0].nb - 1;
-
-    const int year = get_year_from_timestamp(PAIRS[0].timestamp[0]);
-    const int month = get_month_from_timestamp(PAIRS[0].timestamp[0]);
-    const int day = get_day_from_timestamp(PAIRS[0].timestamp[0]);
-
-    const int last_year = get_year_from_timestamp(PAIRS[0].timestamp[last_idx]);
-    const int last_month = get_month_from_timestamp(PAIRS[0].timestamp[last_idx]);
-    const int last_day = get_day_from_timestamp(PAIRS[0].timestamp[last_idx]);
-
-    std::time_t difference = std::abs(int(PAIRS[0].timestamp[last_idx]) - int(PAIRS[0].timestamp[0]));
-    const int days = difference / (24 * 60 * 60);
-
-    // Display info
-    std::cout << "Begin day                         : " << year << "/" << month << "/" << day << endl;
-    std::cout << "End day                           : " << last_year << "/" << last_month << "/" << last_day << endl;
-    std::cout << "Number of days                    : " << YELLOW << days << RESET << std::endl;
-    std::cout << "OPEN/CLOSE FEE                    : " << FEE << " %" << endl;
-    std::cout << "Minimum number of trades required : " << MIN_NUMBER_OF_TRADES << endl;
-    std::cout << "Maximum drawback allowed          : " << MIN_ALLOWED_MAX_DRAWBACK << " %" << endl;
+    strategy_runner::print_banner(STRAT_NAME, DATAFILES, PAIRS[0], FEE, MIN_NUMBER_OF_TRADES, MIN_ALLOWED_MAX_DRAWBACK);
     std::cout << "EMA1 max tested                   : " << find_max(range_EMA1) << endl;
     std::cout << "EMA2 max tested                   : " << find_max(range_EMA2) << endl;
     std::cout << "EMA3 max tested                   : " << find_max(range_EMA3) << endl;
     std::cout << "StochRSI max tested               : " << find_max(range_STOCH_RSI_LOWER) << endl;
-    std::cout << "-------------------------------------------------------------------------" << endl;
 
-    // MAIN LOOP
+    // MAIN LOOP — uses random-sample-with-replacement (budget-capped), so it cannot use
+    // strategy_runner::sweep (which expects an enumerated parameter list).
     const long int nb_total = range_EMA1.size() * range_EMA2.size() * range_EMA3.size() * range_UP.size() * range_DOWN.size() * range_STOCH_RSI_LOWER.size() * MAX_OPEN_TRADES_TO_TEST.size();
 
     std::cout << "Running all backtests..." << std::endl;
@@ -384,15 +316,7 @@ int main()
     print_best_res(best);
     WRITE_OR_UPDATE_BEST_SCORE_FILE(STRAT_NAME, out_filename, best);
 
-    const double t_end = get_wall_time();
-
-    std::cout << "Number of backtests performed : " << nb_tested << endl;
-    std::cout << "Time taken                    : " << t_end - t_begin << " seconds " << endl;
-    const double ram_usage = process_mem_usage();
-    std::cout << "RAM usage                     : " << std::round(ram_usage * 10.0) / 10.0 << " MB" << endl;
-    std::cout << "-------------------------------------------------------------------------" << endl;
-
+    strategy_runner::print_timing_and_ram(t_begin, nb_tested);
     TA_Shutdown();
-
     return 0;
 }

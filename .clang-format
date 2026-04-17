@@ -1,0 +1,17 @@
+# Style matches the existing code: Allman braces, 4-space indent, no column cap.
+# Not applied repo-wide in this repo — committed so new edits stay consistent.
+BasedOnStyle: LLVM
+IndentWidth: 4
+TabWidth: 4
+UseTab: Never
+ColumnLimit: 0
+BreakBeforeBraces: Allman
+AccessModifierOffset: -4
+NamespaceIndentation: None
+SortIncludes: false
+AllowShortIfStatementsOnASingleLine: false
+AllowShortLoopsOnASingleLine: false
+AllowShortFunctionsOnASingleLine: Empty
+PointerAlignment: Right
+SpaceAfterTemplateKeyword: true
+Cpp11BracedListStyle: true

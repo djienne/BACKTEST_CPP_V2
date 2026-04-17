@@ -1,5 +1,7 @@
 #pragma once
 
+#include <cassert>
+
 #include "tools.hh"
 
 namespace trade_core
@@ -94,6 +96,7 @@ void close_spot_long(PortfolioState<N> &state, TradeStats &stats, const uint pai
 template <size_t N>
 void open_spot_long(PortfolioState<N> &state, TradeStats &stats, const uint pair_index, const float close_price, const float fee_pc, const uint max_open_trades)
 {
+    assert(state.active_positions < max_open_trades);
     state.price_position_open[pair_index] = close_price;
 
     const float usd_multiplier = 1.0f / float(max_open_trades - state.active_positions);
@@ -168,6 +171,7 @@ void close_futures_short(PortfolioState<N> &state, TradeStats &stats, const uint
 template <size_t N>
 void open_futures_long(PortfolioState<N> &state, TradeStats &stats, const uint pair_index, const float close_price, const float fee_pc, const uint max_open_trades)
 {
+    assert(state.active_positions < max_open_trades);
     const float usd_multiplier = 1.0f / float(max_open_trades - state.active_positions);
     state.coin_amounts[pair_index] = state.usdt_amount * usd_multiplier / close_price;
     state.usdt_amount -= state.usdt_amount * usd_multiplier;
@@ -184,6 +188,7 @@ void open_futures_long(PortfolioState<N> &state, TradeStats &stats, const uint p
 template <size_t N>
 void open_futures_short(PortfolioState<N> &state, TradeStats &stats, const uint pair_index, const float close_price, const float fee_pc, const uint max_open_trades)
 {
+    assert(state.active_positions < max_open_trades);
     const float usd_multiplier = 1.0f / float(max_open_trades - state.active_positions);
     state.coin_amounts[pair_index] = -1.0f * state.usdt_amount * usd_multiplier / close_price;
     state.usdt_amount -= state.usdt_amount * usd_multiplier;
