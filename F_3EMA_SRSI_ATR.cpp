@@ -15,6 +15,7 @@
 #include <thread>
 #include <random>
 
+using namespace std;
 using uint = unsigned int;
 
 const string STRAT_NAME = "F_EMA3_SRSI_ATR";

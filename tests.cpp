@@ -16,6 +16,13 @@
 //   - tools::find_max/find_min handle all-negative inputs
 //   - tools::get_funding_fee_if_any timestamp filtering
 //   - custom_talib_wrapper::TALIB_EMA warmup length
+//   - custom_talib_wrapper::TALIB_BBANDS output sizing + band ordering
+//   - custom_talib_wrapper::TALIB_AO output length
+//   - custom_talib_wrapper::TALIB_STOCHRSI_not_averaged range [0,1]
+//   - trade_core::apply_funding_fee (long debited, no-op on flat)
+//   - tools::calculate_calmar_ratio on a synthetic 3-year wallet curve
+//   - tools::realign_timestamps synthetic misaligned pair
+//   - strategy_runner::sweep best-tracking predicate (gating filters)
 
 #include <cmath>
 #include <cstdio>
@@ -26,6 +33,7 @@
 #include <vector>
 
 #include "custom_talib_wrapper.hh"
+#include "strategy_runner.hh"
 #include "tools.hh"
 #include "trade_core.hh"
 #include <ta-lib/ta_libc.h>
@@ -262,6 +270,199 @@ void test_talib_ema_warmup()
     TA_Shutdown();
 }
 
+void test_talib_bbands_shape()
+{
+    TA_Initialize();
+    std::vector<float> series;
+    series.reserve(100);
+    // Slowly drifting sine ensures non-zero std, so upper > middle > lower in steady state.
+    for (int i = 0; i < 100; ++i)
+    {
+        series.push_back(100.0f + 5.0f * std::sin(i * 0.2f) + 0.1f * i);
+    }
+    std::vector<float> u, m, l;
+    TALIB_BBANDS(series, 2.0f, 2.0f, 20, u, m, l);
+    REQUIRE(u.size() == series.size());
+    REQUIRE(m.size() == series.size());
+    REQUIRE(l.size() == series.size());
+    // Steady-state (past warmup): upper > middle > lower on this oscillating input.
+    REQUIRE(u[50] > m[50]);
+    REQUIRE(m[50] > l[50]);
+    TA_Shutdown();
+}
+
+void test_talib_ao_shape()
+{
+    TA_Initialize();
+    const int n = 80;
+    std::vector<float> high, low;
+    high.reserve(n);
+    low.reserve(n);
+    for (int i = 0; i < n; ++i)
+    {
+        const float base = 100.0f + i;
+        high.push_back(base + 1.0f);
+        low.push_back(base - 1.0f);
+    }
+    const std::vector<float> ao = TALIB_AO(high, low, 5, 34);
+    REQUIRE(ao.size() == high.size());
+    // Monotone uptrend -> AO should be positive in the tail (fast MA above slow MA).
+    REQUIRE(ao.back() > 0.0f);
+    TA_Shutdown();
+}
+
+void test_talib_stochrsi_range()
+{
+    TA_Initialize();
+    std::vector<float> series;
+    series.reserve(200);
+    // Mean-reverting saw-tooth so StochRSI produces varied non-degenerate values.
+    for (int i = 0; i < 200; ++i)
+    {
+        series.push_back(100.0f + 10.0f * std::sin(i * 0.3f));
+    }
+    const std::vector<float> srsi = TALIB_STOCHRSI_not_averaged(series, 14, 14);
+    REQUIRE(srsi.size() == series.size());
+    int bounded = 0;
+    int saw_nonzero = 0;
+    // Sample past the warmup region; values must fall in [0, 1].
+    for (size_t i = 50; i < srsi.size(); ++i)
+    {
+        if (srsi[i] >= 0.0f && srsi[i] <= 1.0f)
+        {
+            ++bounded;
+        }
+        if (srsi[i] > 0.0f)
+        {
+            ++saw_nonzero;
+        }
+    }
+    REQUIRE(bounded == static_cast<int>(srsi.size() - 50));
+    REQUIRE(saw_nonzero > 10);
+    TA_Shutdown();
+}
+
+void test_apply_funding_fee()
+{
+    constexpr float fee = 0.0001f; // 0.01%
+    trade_core::PortfolioState<1> state(1000.0f);
+    // No position -> apply_funding_fee should not change anything.
+    trade_core::apply_funding_fee(state, 0, 100.0f, fee);
+    REQUIRE_NEAR(state.usdt_amount, 1000.0f, 1e-6);
+    REQUIRE_NEAR(state.total_fees_paid_usdt, 0.0f, 1e-6);
+
+    // Simulate a long position of 1 coin at price 100. Positive funding debits USDT.
+    state.coin_amounts[0] = 1.0f;
+    state.price_position_open[0] = 100.0f;
+    const float before = state.usdt_amount;
+    trade_core::apply_funding_fee(state, 0, 110.0f, fee);
+    const float expected_deduction = 1.0f * 110.0f * fee;
+    REQUIRE_NEAR(before - state.usdt_amount, expected_deduction, 1e-4);
+    REQUIRE_NEAR(state.total_fees_paid_usdt, expected_deduction, 1e-4);
+
+    // Zero funding -> no-op even with a position.
+    const float after = state.usdt_amount;
+    trade_core::apply_funding_fee(state, 0, 120.0f, 0.0f);
+    REQUIRE_NEAR(state.usdt_amount, after, 1e-6);
+}
+
+void test_calculate_calmar_ratio()
+{
+    // Synthetic: ATH then flat over ~3 years. Build timestamps monthly.
+    std::vector<int> ts;
+    std::vector<float> wv;
+    const int seconds_per_month = 30 * 24 * 3600;
+    const int base = 1577836800; // 2020-01-01 00:00 UTC
+    for (int m = 0; m < 36; ++m)
+    {
+        ts.push_back(base + m * seconds_per_month);
+        wv.push_back(1000.0f + 10.0f * m); // +1% per month roughly
+    }
+    // Feed a known max_DD; function normalizes averaged yearly gain by it.
+    const float cr = calculate_calmar_ratio(ts, wv, -10.0f);
+    // With +1%/mo over ~3 years the mean yearly return should be positive and
+    // dividing by a negative DD yields a negative Calmar in this function's sign
+    // convention — we only check the math is finite and non-degenerate.
+    REQUIRE(std::isfinite(cr));
+    REQUIRE(cr != 0.0f);
+
+    // Too-short series (<= 4 points) returns the sentinel -100.
+    const std::vector<int> short_ts{1, 2, 3};
+    const std::vector<float> short_wv{1.0f, 2.0f, 3.0f};
+    REQUIRE_NEAR(calculate_calmar_ratio(short_ts, short_wv, -10.0f), -100.0f, 1e-6);
+}
+
+void test_realign_timestamps_noop_when_aligned()
+{
+    KLINEf base{};
+    KLINEf other{};
+    for (int i = 0; i < 20; ++i)
+    {
+        base.timestamp.push_back(1000 + i * 60);
+        base.open.push_back(100.0f + i);
+        base.high.push_back(101.0f + i);
+        base.low.push_back(99.0f + i);
+        base.close.push_back(100.0f + i);
+
+        other.timestamp.push_back(1000 + i * 60);
+        other.open.push_back(200.0f + i);
+        other.high.push_back(201.0f + i);
+        other.low.push_back(199.0f + i);
+        other.close.push_back(200.0f + i);
+    }
+    base.nb = 20;
+    base.name = "BASE";
+    other.nb = 20;
+    other.name = "OTHER";
+    other.start_idx = 0;
+
+    const float close_before = other.close[10];
+    realign_timestamps(base, other);
+    // Aligned input -> function short-circuits, leaves `other` untouched.
+    REQUIRE_NEAR(other.close[10], close_before, 1e-6);
+    REQUIRE(other.timestamp.size() == base.timestamp.size());
+}
+
+void test_strategy_runner_sweep_filters()
+{
+    // Exercise the gating predicate: only results that pass all filters should
+    // be picked as `best`. Fabricate three results with different trade-count,
+    // drawdown, and gain profiles.
+    struct P
+    {
+        int id;
+    };
+    std::vector<P> params{{0}, {1}, {2}};
+
+    auto process = [](const P &p) {
+        RUN_RESULTf r{};
+        r.gain_pc = 100.0f + p.id * 50.0f; // 100, 150, 200
+        r.nb_posi_entered = (p.id == 0) ? 10 : 500;
+        r.max_DD = (p.id == 1) ? -99.0f : -20.0f;
+        r.score = 10.0f + p.id; // p=2 has highest score
+        r.max_open_trades = 1;
+        r.param_str = "id=" + std::to_string(p.id);
+        return r;
+    };
+
+    strategy_runner::SweepConfig cfg;
+    cfg.strategy_name = "unit_test";
+    cfg.out_filename = "_unit_test_best.txt";
+    cfg.min_trades = 100;
+    cfg.min_dd = -40.0f;
+    cfg.print_every = 9999; // suppress periodic output during the test
+    cfg.min_reasonable_gain = 0.0f;
+
+    const RUN_RESULTf best = strategy_runner::sweep(cfg, params, process);
+
+    // p=0 excluded (too few trades), p=1 excluded (DD too deep); p=2 wins.
+    REQUIRE(best.param_str == "id=2");
+    REQUIRE_NEAR(best.gain_pc, 200.0f, 1e-6);
+
+    // Cleanup the score file the sweep writes out.
+    std::remove("_unit_test_best.txt");
+}
+
 using TestFn = void (*)();
 struct NamedTest
 {
@@ -282,6 +483,13 @@ const NamedTest ALL_TESTS[] = {
     {"find_min_all_positive", test_find_min_all_positive},
     {"get_funding_fee_timing", test_get_funding_fee_timing},
     {"talib_ema_warmup", test_talib_ema_warmup},
+    {"talib_bbands_shape", test_talib_bbands_shape},
+    {"talib_ao_shape", test_talib_ao_shape},
+    {"talib_stochrsi_range", test_talib_stochrsi_range},
+    {"apply_funding_fee", test_apply_funding_fee},
+    {"calculate_calmar_ratio", test_calculate_calmar_ratio},
+    {"realign_timestamps_noop_when_aligned", test_realign_timestamps_noop_when_aligned},
+    {"strategy_runner_sweep_filters", test_strategy_runner_sweep_filters},
 };
 } // namespace
 

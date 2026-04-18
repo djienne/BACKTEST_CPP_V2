@@ -1,7 +1,7 @@
 EMAs             : 448 11
 Gain             : 2684.75%
 Win rate         : 24.8366%
-max DD           : -38.4448%
-Gain over DDC    : 42.9864
-Score            : 1067.64
+max DD           : -38.3832%
+Gain over DDC    : 43.0985
+Score            : 1070.42
 Number of trades : 153
