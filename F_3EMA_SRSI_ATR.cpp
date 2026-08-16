@@ -60,7 +60,8 @@ const std::vector<float> range_STOCH_RSI_UPPER = float_Nvalues_range(0.09, 0.91,
 
 uint nb_tested = 0;
 
-int refresh_idx = 10;
+// How many backtests between progress/score-file updates.
+uint refresh_idx = 10;
 
 //////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 
@@ -441,7 +442,7 @@ void mainProgramLogic()
 
         const RUN_RESULTf res = PROCESS(PAIRS, FUNDINGS, start_indexes, para.ema1, para.ema2, para.ema3, para.up, para.down, para.SRSIL, para.SRSIU, para.max_open_trades);
 
-        if (res.score > best.score && res.gain_pc < 1000000.0f && res.nb_posi_entered >= MIN_NUMBER_OF_TRADES && res.max_DD > MIN_ALLOWED_MAX_DRAWBACK)
+        if (res.score > best.score && res.gain_pc < 1000000.0f && res.nb_posi_entered >= int(MIN_NUMBER_OF_TRADES) && res.max_DD > MIN_ALLOWED_MAX_DRAWBACK)
         {
             best = res;
         }

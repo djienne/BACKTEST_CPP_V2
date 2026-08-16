@@ -43,7 +43,11 @@ ifeq ($(origin CXXFLAGS_$(BUILD)),undefined)
 $(error Unknown BUILD='$(BUILD)'. Use one of: release debug asan tsan)
 endif
 
-WARNINGS := -Wall -Wextra -Wno-unused-parameter -Wno-sign-compare
+# -Wsign-compare and -Wunused-parameter were suppressed here. Re-enabled: the first
+# already caught a real defect (an aggregate initializer short one member, which left a
+# strategy unable to open any position). -Wshadow is new -- a shadowed member was how
+# RandomNumberGenerator silently discarded its own seeding.
+WARNINGS := -Wall -Wextra -Wshadow
 
 CXXFLAGS := -std=gnu++17 $(CXXFLAGS_$(BUILD)) $(WARNINGS) $(TALIB_INC) -MMD -MP
 LDFLAGS  := $(LDFLAGS_$(BUILD))

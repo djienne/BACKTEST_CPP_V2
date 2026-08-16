@@ -36,7 +36,6 @@ const bool CAN_SHORT = true;
 vector<string> DATAFILES = {};
 vector<string> DATAFILES_fundings{};
 
-const float start_year = 2017; // forced year to start (applies if data below is available)
 const float FEE = 0.1f;        // FEES in %
 const float USDT_amount_initial = 1000.0f;
 const uint MIN_NUMBER_OF_TRADES = 100;         // minimum number of trades required (to avoid some noise / lucky circunstances)
@@ -339,8 +338,10 @@ int main()
     // MAIN LOOP
 
     std::vector<BBTREND_params> param_list{};
-    const int nb_tested = range_EMA.size() * MAX_OPEN_TRADES_TO_TEST.size() * range_BBlength.size() * range_BBstd.size();
-    param_list.reserve(nb_tested);
+    // Renamed from nb_tested, which shadowed the global counter of the same name that
+    // PROCESS increments and the final report prints.
+    const size_t nb_param_sets = range_EMA.size() * MAX_OPEN_TRADES_TO_TEST.size() * range_BBlength.size() * range_BBstd.size();
+    param_list.reserve(nb_param_sets);
 
     for (const uint MAX_OPEN_TRADES : MAX_OPEN_TRADES_TO_TEST)
     {
@@ -370,7 +371,7 @@ int main()
         i_print3++;
         nb_done++;
 
-        if (res.score > best.score && res.gain_pc < 1000000.0f && res.nb_posi_entered >= MIN_NUMBER_OF_TRADES && res.max_DD > MIN_ALLOWED_MAX_DRAWBACK)
+        if (res.score > best.score && res.gain_pc < 1000000.0f && res.nb_posi_entered >= int(MIN_NUMBER_OF_TRADES) && res.max_DD > MIN_ALLOWED_MAX_DRAWBACK)
         {
             best = res;
         }
@@ -380,8 +381,8 @@ int main()
             print_best_res(best);
             WRITE_OR_UPDATE_BEST_SCORE_FILE(STRAT_NAME, out_filename, best);
             i_print3 = 0;
-            const float pc_done = std::round(float(nb_done) / float(nb_tested) * 100.0 * 100.0) / 100.0;
-            std::cout << "DONE " << nb_done << " / " << nb_tested << "   = " << pc_done << "%" << std::endl;
+            const float pc_done = std::round(float(nb_done) / float(nb_param_sets) * 100.0 * 100.0) / 100.0;
+            std::cout << "DONE " << nb_done << " / " << nb_param_sets << "   = " << pc_done << "%" << std::endl;
         }
     }
 

@@ -41,9 +41,11 @@ KLINEf kline{};
 
 void print_best_res(const RUN_RESULTf best)
 {
-    const int year = get_year_from_timestamp(kline.timestamp[0]);
-    const int month = get_month_from_timestamp(kline.timestamp[0]);
-    const int day = get_day_from_timestamp(kline.timestamp[0]);
+    // Named *_first rather than year/month/day, which shadowed the same-named global
+    // series below and made it non-obvious which was being printed.
+    const int first_year = get_year_from_timestamp(kline.timestamp[0]);
+    const int first_month = get_month_from_timestamp(kline.timestamp[0]);
+    const int first_day = get_day_from_timestamp(kline.timestamp[0]);
     const uint last_idx = kline.nb - 1;
     const int last_year = get_year_from_timestamp(kline.timestamp[last_idx]);
     const int last_month = get_month_from_timestamp(kline.timestamp[last_idx]);
@@ -56,7 +58,7 @@ void print_best_res(const RUN_RESULTf best)
     std::cout << "\n-------------------------------------" << std::endl;
     std::cout << "TIME RANGE: " << std::endl;
     std::cout << "-------------------------------------" << std::endl;
-    std::cout << " Begin day : " << year << "/" << month << "/" << day << endl;
+    std::cout << " Begin day : " << first_year << "/" << first_month << "/" << first_day << endl;
     std::cout << " End day   : " << last_year << "/" << last_month << "/" << last_day << endl;
     std::cout << " Duration  : " << days << " days" << endl;
     std::cout << "-------------------------------------" << std::endl;
@@ -77,7 +79,9 @@ void print_best_res(const RUN_RESULTf best)
 }
 
 //////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
-void INITIALIZE_DATA0(const KLINEf &kline)
+// Operates on the file-scope `kline`, which is the only thing it was ever called with.
+// It previously took a parameter of the same name that shadowed that global.
+void INITIALIZE_DATA0()
 {
     std::cout << "Initializing data (calculating indicators)...\n"
               << std::endl;
@@ -93,7 +97,7 @@ void INITIALIZE_DATA0(const KLINEf &kline)
     month.reserve(kline.nb);
     day.reserve(kline.nb);
 
-    for (int i = MIN_EMA; i <= range2.size() + 5; i++)
+    for (int i = MIN_EMA; i <= static_cast<int>(range2.size()) + 5; i++)
     {
         list_ema.push_back(i);
     }
@@ -198,12 +202,11 @@ int main()
 
     kline = read_input_data(DATAFILE);
 
-    INITIALIZE_DATA0(kline);
+    INITIALIZE_DATA0();
 
     RUN_RESULTf best{};
     best.gain_over_DDC = -100.0;
 
-    int i_print2 = 0;
     int i_print3 = 0;
 
     std::cout << "Begining day : " << year[0] << "/" << month[0] << "/" << day[0] << std::endl;

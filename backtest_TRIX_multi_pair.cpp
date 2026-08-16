@@ -36,7 +36,6 @@ const string timeframe = "1h";
 
 vector<string> DATAFILES = {};
 
-const float start_year = 2017; // forced year to start (applies if data below is available)
 const float FEE = 0.1f;        // FEES in %
 const float USDT_amount_initial = 1000.0f;
 const uint MIN_NUMBER_OF_TRADES = 200;

@@ -26,7 +26,6 @@ const string timeframe = "1h";
 const vector<string> DATAFILES = {"./data/data/binance/" + timeframe + "/" + COINS[0] + "-USDT.csv",
                                   "./data/data/binance/" + timeframe + "/" + COINS[1] + "-USDT.csv"};
 
-const float start_year = 2017; // forced year to start (applies if data below is available)
 const float FEE = 0.1f;        // FEES in %
 const float USDT_amount_initial = 1000.0f;
 const uint MIN_NUMBER_OF_TRADES = 100;         // minimum number of trades required (to avoid some noise / lucky circunstances)
@@ -43,7 +42,6 @@ vector<int> range_EMA_long = integer_range(70, period_max_EMA + 4, 1);
 //////////////////////////
 array<std::unordered_map<string, vector<float>>, NB_PAIRS> EMA_LISTS{};
 array<vector<float>, NB_PAIRS> StochRSI{};
-array<long int, NB_PAIRS> last_times{};
 
 uint nb_tested = 0;
 

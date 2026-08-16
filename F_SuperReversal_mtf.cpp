@@ -53,7 +53,6 @@ std::vector<int> range_ema_fast = generateRange_int(3, 600, 300);
 std::vector<int> range_ema_slow = generateRange_int(3, 600, 300);
 //////////////////////////
 
-uint last_times[NB_PAIRS];
 
 uint i_print = 0;
 uint nb_tested = 0;
@@ -360,7 +359,7 @@ int main()
         }
         const RUN_RESULTf res = PROCESS(PAIRS, FUNDINGS, par.ema_fast, par.ema_slow, par.max_open_trades);
 
-        if (res.score > best.score && res.gain_pc < 1000000.0f && res.nb_posi_entered >= MIN_NUMBER_OF_TRADES && res.max_DD > MIN_ALLOWED_MAX_DRAWBACK)
+        if (res.score > best.score && res.gain_pc < 1000000.0f && res.nb_posi_entered >= int(MIN_NUMBER_OF_TRADES) && res.max_DD > MIN_ALLOWED_MAX_DRAWBACK)
         {
             best = res;
         }

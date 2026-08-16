@@ -35,7 +35,6 @@ static const uint NB_PAIRS = 11;
 
 const std::string timeframe = "1h";
 
-const float start_year = 2017; // forced year to start (applies if data below is available)
 const float FEE = 0.1f;        // FEES in %
 const float USDT_amount_initial = 1000.0f;
 const uint MIN_NUMBER_OF_TRADES = 100;         // minimum number of trades required (to avoid some noise / lucky circunstances)
@@ -427,7 +426,7 @@ int mainProgramLogic()
         i_print3++;
         nb_done++;
 
-        if (res.score > best.score && res.gain_pc > 15.0 && res.gain_pc < 1000000.0f && res.nb_posi_entered >= MIN_NUMBER_OF_TRADES && res.max_DD > MIN_ALLOWED_MAX_DRAWBACK)
+        if (res.score > best.score && res.gain_pc > 15.0 && res.gain_pc < 1000000.0f && res.nb_posi_entered >= int(MIN_NUMBER_OF_TRADES) && res.max_DD > MIN_ALLOWED_MAX_DRAWBACK)
         {
             best = res;
         }

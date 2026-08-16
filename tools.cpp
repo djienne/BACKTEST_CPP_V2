@@ -127,24 +127,30 @@ double get_wall_time()
 
 //////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 
+// Resident set size in MB -- the memory actually held in RAM.
+//
+// This used to read the same /proc/self/stat line but return `vsize`, the *virtual*
+// size, while every caller printed it as "RAM usage". Virtual size counts reservations
+// the process never touches and typically overstates the real footprint several times
+// over. The rss field and the page size were both read and then ignored.
 double process_mem_usage()
 {
-    double vm_usage = 0.0;
 #if defined(__linux__)
-
-    // the two fields we want
-    unsigned long vsize;
-    long rss;
+    unsigned long vsize = 0;
+    long rss_pages = 0;
     {
         std::string ignore;
         std::ifstream ifs("/proc/self/stat", std::ios_base::in);
         ifs >> ignore >> ignore >> ignore >> ignore >> ignore >> ignore >>
-            ignore >> ignore >> ignore >> ignore >> ignore >> ignore >> ignore >> ignore >> ignore >> ignore >> ignore >> ignore >> ignore >> ignore >> ignore >> ignore >> vsize >> rss;
+            ignore >> ignore >> ignore >> ignore >> ignore >> ignore >> ignore >> ignore >> ignore >> ignore >> ignore >> ignore >> ignore >> ignore >> ignore >> ignore >> vsize >> rss_pages;
     }
-    long page_size_kb = sysconf(_SC_PAGE_SIZE) / 1024; // in case x86-64 is configured to use 2MB pages
-    vm_usage = vsize / 1024.0 / 1024.0;
+    // rss is reported in pages; the page size is read rather than assumed, since x86-64
+    // can be configured with 2 MB pages.
+    const long page_size_bytes = sysconf(_SC_PAGE_SIZE);
+    return double(rss_pages) * double(page_size_bytes) / 1024.0 / 1024.0;
+#else
+    return 0.0;
 #endif
-    return vm_usage;
 }
 
 //////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
@@ -536,7 +542,7 @@ std::vector<uint> INITIALIZE_DATA(std::vector<KLINEf> &PAIRS)
 {
     std::cout << "Running INITIALIZE_DATA..." << std::endl;
 
-    const int NB_PAIRS = PAIRS.size();
+    const uint NB_PAIRS = static_cast<uint>(PAIRS.size());
 
     std::vector<uint> start_indexes{};
     start_indexes.reserve(NB_PAIRS);
@@ -826,47 +832,10 @@ fundings read_funding_rates_data(const std::string &input_file_path)
 
 //////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 
-std::vector<std::vector<float>> splitVector(const std::vector<float> &inputVector, const int splitSize)
-{
-    std::vector<std::vector<float>> result;
-    const int numSubVectors = inputVector.size() / splitSize;
-    const int remainingElements = inputVector.size() % splitSize;
-    int currentIndex = 0;
-
-    // std::cout << numSubVectors << std::endl;
-    // std::cout << remainingElements << std::endl;
-
-    for (int i = 0; i < numSubVectors; ++i)
-    {
-        std::vector<float> subVector(inputVector.begin() + currentIndex, inputVector.begin() + currentIndex + splitSize);
-        result.push_back(subVector);
-        currentIndex += splitSize;
-    }
-
-    if (remainingElements > 0)
-    {
-        std::vector<float> subVector(inputVector.begin() + currentIndex, inputVector.begin() + currentIndex + remainingElements);
-        result.push_back(subVector);
-    }
-
-    return result;
-}
-
-//////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
-
-std::vector<float> duplicateElements(const std::vector<float> &inputVector, const int n)
-{
-    std::vector<float> outputVector;
-    outputVector.reserve(inputVector.size() * n);
-    for (const auto &element : inputVector)
-    {
-        for (int i = 0; i < n; ++i)
-        {
-            outputVector.push_back(element);
-        }
-    }
-    return outputVector;
-}
+// splitVector and duplicateElements lived here. They existed only to hand-roll
+// timeframe resampling inside the two mtf strategies; RESAMPLE_TIMEFRAME and
+// PROJECT_HTF_TO_LTF in indicators.* replaced both, with boundary alignment and
+// anti-lookahead handling those helpers did not have.
 
 //////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 

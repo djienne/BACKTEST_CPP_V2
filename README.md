@@ -1,182 +1,193 @@
 # Trading Strategy Backtester C++
 
-## Purpose
-A high-performance backtesting framework for running fast and memory-efficient backtests on various trading strategies (EMA crossover, SuperTrend, Bollinger Bands, etc.).
+A high-performance parameter-sweep backtester for trading strategies (EMA crossover,
+SuperTrend, Bollinger breakout, TRIX, and others), built on TA-Lib.
 
-**Notes:** 
-- Strategies with `F_` prefix are designed for futures markets, while those without the prefix are for spot markets.
-- Uses `float` (32-bit) variables instead of `double` (64-bit) in many hot paths, which can cut numeric array memory usage by about 2x and may improve speed in memory-heavy workloads.
+**Notes:**
+- Strategies with an `F_` prefix target futures markets; the rest are spot.
+- Price and indicator arrays are `float` (32-bit), which roughly halves numeric array
+  memory versus `double`. Wallet balances, fees and result metrics are `double` — those
+  accumulate across thousands of operations, and they are what the sweep ranks on.
+- All timestamps are interpreted as **UTC**, so results do not depend on the machine's
+  timezone.
 
-## Performance Comparison
+## Performance
 
-Current end-to-end benchmark for the simple 2-EMA crossover on `BTC-USDT 1h`:
+End-to-end benchmark for the simple 2-EMA crossover on `BTC-USDT 1h`:
 
-| Implementation | Parameter sweep | Total time | Relative to C++ | Notes |
-| --- | ---: | ---: | ---: | --- |
-| C++ | 174,936 pairs | 12.99 s | 1.00x | Measured |
-| Python + Numba | 174,936 pairs | 39.80 s | 3.06x slower | Measured |
-| Pure Python | 174,936 pairs | ~6323 s | 486.59x slower | Estimated from a measured 1024-pair run |
+| Implementation | Parameter sweep | Total time | Relative to C++ |
+| --- | ---: | ---: | ---: |
+| C++ | 174,936 pairs | 12.99 s | 1.00x |
+| Python + Numba | 174,936 pairs | 39.80 s | 3.06x slower |
+| Pure Python | 174,936 pairs | ~6323 s | 486x slower (estimated) |
 
-## Features
-- Leverages TA-lib (Technical Analysis Library) for technical indicators
-- Large speedups compared to pure Python implementations in benchmarked cases
-- Low memory footprint
-- Supports multiple trading pairs
-- Includes built-in statistics for strategy evaluation (win rate, drawdown, Calmar ratio, etc.)
-- Can be used as boilerplate code to test custom strategies
+## Getting started
 
-## Available Strategies
+### Required packages (Ubuntu/Debian)
 
-### EMA-Based Strategies
-- `backtest_double_EMA_float.cpp`: Basic 2-EMA crossover strategy optimizer
-- `backtest_double_EMA_StochRSI_float.cpp`: 2-EMA crossover with Stochastic RSI filter
-- `backtest_double_EMA_StochRSI_float_muti_pair.cpp`: Multi-pair version of EMA with StochRSI strategy
-
-### Multiple Indicator Strategies
-- `BigWill.cpp`: Spot market strategy using Williams %R, EMAs, and Awesome Oscillator
-- `F_BigWill.cpp`: Futures trading strategy combining Awesome Oscillator, Williams %R, and EMA crossovers
-- `3EMA_SRSI_ATR.cpp`: Spot market strategy using triple EMA, Stochastic RSI, and ATR
-- `F_3EMA_SRSI_ATR.cpp`: Futures trading strategy with three EMAs, Stochastic RSI, and dynamic ATR-based exit levels
-
-### TRIX-Based Strategies
-- `backtest_TRIX.cpp`: Optimizer for TRIX indicator strategies (inspired by Crypto Robot)
-- `backtest_TRIX_multi_pair.cpp`: Multi-pair TRIX strategy (BTC, ETH, BNB, XRP) with position management
-
-### Bollinger Bands Strategies
-- `BBTREND.cpp`: Spot market strategy using Bollinger Bands breakouts
-- `F_BBTREND.cpp`: Futures trading strategy for trend breakouts with Bollinger Bands and EMA filter
-
-### SuperTrend Strategies
-- `SuperTrend_EMA_ATR.cpp`: Combines SuperTrend indicator with EMA and ATR-based position management
-- `SuperReversal_mtf.cpp`: Spot market multi-timeframe strategy using SuperTrend and EMAs
-- `F_SuperReversal_mtf.cpp`: Futures multi-timeframe strategy with SuperTrend and EMA crossovers
-
-## Installation
-
-### Required Packages (Ubuntu/Debian)
 ```bash
 sudo apt-get update
-sudo apt-get install -y build-essential libjsoncpp-dev nlohmann-json3-dev gcc g++
+sudo apt-get install -y build-essential libjsoncpp-dev nlohmann-json3-dev gcc g++ unzip
 ```
 
-### Setup Options
+### Build TA-Lib
 
-#### Option 1: Direct installation on Linux/Ubuntu
-1. Install a C/C++ compiler (recommended: g++ and gcc)
-2. Compile TA-lib:
-   ```bash
-   unzip talib.zip
-   cd talib
-   ./configure --prefix=/$(pwd)/talib_install/
-   make
-   make install
-   make clean
-   ```
-3. Compile the strategies:
-   ```bash
-   cd ..  # return to root folder
-   make
-   ```
-
-#### Option 2: Windows using WSL (Windows Subsystem for Linux)
-1. Install WSL (Windows Subsystem for Linux) on your Windows machine
-2. Follow the Linux/Ubuntu instructions above within your WSL environment
-
-#### Using the install script should work too
 ```bash
-sh install.sh
+unzip -o talib.zip
+cd talib
+./configure --prefix="$(pwd)/talib_install/"
+make
+make install
+cd ..
 ```
 
-#### Option 3: Docker
-Use the docker-compose project in the `docker_easy` directory (see `README.md` inside for details).
+Build TA-Lib **serially** — its own `src/tools/gen_code` target races under `make -j` and
+will fail intermittently. The backtester itself builds fine in parallel.
 
-## Running Backtests
+On Windows, do this inside WSL. `install.sh` performs the same steps.
 
-After compilation, execute a strategy backtest:
+### Build and run
+
 ```bash
-./backtest_double_EMA_float.exe  # or any other compiled strategy
+make -j all              # all strategies + regression drivers + unit tests
+./backtest_double_EMA_float.exe
 ```
 
-## Shared Core
+Binaries carry an rpath to the in-tree TA-Lib, so no `LD_LIBRARY_PATH` is needed.
 
-Recent refactors moved common backtest mechanics into a shared trade core:
-- `tools.*` owns shared data loading, timestamp alignment, funding lookup, reporting helpers, and generic utilities
-- `custom_talib_wrapper.*` owns indicator wrappers and TA-Lib integration
-- `trade_core.*` owns reusable trade execution mechanics such as open/close handling, fee/funding application, wallet snapshots, drawdown tracking, and common result assembly
-- `strategy_runner.hh` (header-only) owns the parameter-sweep loop, banner/result printing, and score-file cadence — so strategy files only keep their signal logic, indicator precomputation, and parameter ranges
+| Command | Purpose |
+| --- | --- |
+| `make` | default strategy only |
+| `make <Name>` | one strategy, e.g. `make BigWill` |
+| `make tests && ./tests.exe` | unit suite (fast, no data dependency) |
+| `make BUILD=debug all` | `-O0 -g` |
+| `make BUILD=asan tests` | AddressSanitizer + UBSan |
+| `make BUILD=tsan all` | ThreadSanitizer |
+| `make format` | clang-format in place |
+| `make help` | list discovered strategies |
 
-The active multi-pair spot strategy families now use that shared execution and sweep layer. Futures (`F_*`) strategies use a threaded `mainProgramLogic` pattern and still drive their sweeps manually; they share the trade-core mechanics but not the sweep runner.
+Strategies are discovered from `*.cpp` automatically — adding one needs no Makefile edit.
 
-## Regression Safety
+## Strategies
 
-For low-risk refactors, keep the shared utility layer as the single source of truth:
-- use `read_input_data`, `read_input_data_f`, and `read_funding_rates_data` instead of strategy-local parsers
-- compare `gain`, `max DD`, `win rate`, `trade count`, and final wallet value before/after refactors
-- use `verification_regression.cpp` for a fast smoke test of CSV loading, JSON loading, TA-Lib wrappers, timestamp alignment, and funding lookups
-- use `strategy_regression.cpp` for one fixed multi-pair spot case through the shared trade core
+Whether a strategy runs depends on the bundled data, which is incomplete (see
+[Data](#data)).
 
-Build the regression probe with:
+| Strategy | Market | Timeframe | Indicators | Runs on bundled data |
+| --- | --- | --- | --- | :---: |
+| `backtest_double_EMA_float` | spot | 1h | 2 EMAs | yes |
+| `backtest_double_EMA_StochRSI_float_muti_pair` | spot | 1h | 2 EMAs + StochRSI | yes |
+| `BigWill` | spot | 1h | Williams %R, EMAs, Awesome Oscillator | yes |
+| `backtest_TRIX_multi_pair` | spot | 1h | TRIX, EMA, StochRSI | yes |
+| `BBTREND` | spot | 2h | Bollinger breakout + EMA | yes |
+| `SuperTrend_EMA_ATR` | spot | 4h | SuperTrend, EMA, ATR | yes |
+| `3EMA_SRSI_ATR` | spot | 5m | 3 EMAs, StochRSI, ATR | no — no 5m spot data |
+| `SuperReversal_mtf` | spot | 5m/1h | SuperTrend + EMAs, multi-timeframe | no — no 5m spot data |
+| `F_BigWill` | futures | 1h | as `BigWill`, long + short | no — no MATIC/XLM futures |
+| `F_BBTREND` | futures | 2h | as `BBTREND`, long + short | no — no 2h futures data |
+| `F_SuperReversal_mtf` | futures | 5m/1h | as `SuperReversal_mtf` | no — no MATIC/XLM futures |
+| `F_3EMA_SRSI_ATR` | futures | 5m | as `3EMA_SRSI_ATR`, long + short | no — no MATIC/XLM futures |
+
+`STRATEGY_TEMPLATE.cpp` is a complete, working RSI/EMA example to copy when adding your
+own — it runs against the bundled data in about two seconds.
+
+### Futures model
+
+Leverage is 1 and **there is no liquidation model**. A short is valued as its mirrored
+long, `2 * entry - price`, which is exact at leverage 1 but has no floor: a position that
+runs far enough against the book can drive the wallet negative and keep trading. Read
+futures results as an un-liquidated upper bound.
+
+## Indicators
+
+All in `indicators.hh` / `indicators.cpp`. Output length always equals input length, with
+the warmup region left-padded with zeros and its length reported — see
+[CONTRIBUTING.md](CONTRIBUTING.md).
+
+| Group | Indicators |
+| --- | --- |
+| Moving averages | SMA, EMA, WMA, DEMA, TEMA, KAMA, HMA |
+| Momentum | RSI, MACD, Stochastic (%K/%D), StochRSI (K/D/raw), CCI, ROC, MOM, Williams %R, Aroon, Ultimate Oscillator, Awesome Oscillator |
+| Trend strength | ADX, +DI, −DI, DMI, Parabolic SAR, TRIX, SuperTrend |
+| Volatility | ATR, NATR, True Range, StdDev, Bollinger Bands, Keltner Channels, Donchian Channels |
+| Volume | OBV, MFI, A/D, Chaikin A/D Oscillator, rolling VWAP, relative volume |
+| Transforms | HL2, HLC3, OHLC4, Heikin-Ashi |
+| Multi-timeframe | `RESAMPLE_TIMEFRAME`, `PROJECT_HTF_TO_LTF` |
+| Rolling extremes | MIN, MAX |
+
+**StochRSI caveat:** `TALIB_STOCHRSI_*` round the normalized RSI to 3 decimals before
+smoothing. This is inherited behaviour, kept because tracked results and tuned parameter
+sets depend on it, but it means they do not match TA-Lib's own `STOCHRSI` exactly.
+
+## Architecture
+
+- `tools.*` — data loading, timestamp alignment, funding lookup, ranges, reporting
+- `indicators.*` — the indicator library and TA-Lib integration
+- `indicator_cache.hh` — per-pair keyed store of precomputed series
+- `trade_core.*` — position open/close, fees, funding, wallet snapshots, drawdown, result
+  metrics
+- `strategy_runner.hh` — the parameter-sweep loop, banner and result printing, score-file
+  cadence
+- `Klinef.hh` — the OHLCV container plus its `IndicatorCache`
+
+Strategy files own only their signal logic, their indicator precomputation, and their
+parameter ranges.
+
+## Testing
+
 ```bash
-make verification
-./verification_regression.exe
+./run_regression.sh              # build + unit suite + the three numeric fixtures
+./run_regression.sh --rebaseline # regenerate fixtures after an intended result change
 ```
 
-Build the fixed multi-pair regression harness with:
-```bash
-make strategy_regression
-./strategy_regression.exe
+On Windows, `powershell -File .\run_regression.ps1` wraps the same script via WSL.
+
+The gate runs the unit suite (`tests.cpp`, 230+ checks covering trade-core fee maths,
+result metrics, drawdown, ranges, the calendar helpers, and every indicator), then
+compares three harnesses against `regression_expected/`:
+
+- `verification_regression` — CSV/JSON loading, TA-Lib wrappers, alignment, funding
+- `strategy_regression` — one fixed multi-pair spot case through the shared trade core
+- `backtest_double_EMA_float` — a full 175k-point sweep, pinned to its winning parameters
+
+CI runs all of that plus ASan/UBSan and TSan builds of the unit suite.
+
+A fixture change means a real result change: explain it in the commit message.
+
+## Data
+
+Provided in `data/` for testing (and outdated). **Coverage is incomplete:**
+
+- Spot: 15m, 1h, 2h, 4h — **no 5m**
+- Futures: 1h, 4h, 5m — **no 2h**, and **no MATIC or XLM** at any timeframe
+
+That is why six of the twelve strategies cannot run as configured. Fresh data goes in
+`data/data/binance/<timeframe>/<COIN>-USDT.csv` (spot) or
+`data/data/futures/<COIN>_USDT-<timeframe>-futures.json` (futures); the archived
+`data_downloader_freqtrade` project downloads it via Freqtrade and Docker.
+
+## Contributing
+
+See [CONTRIBUTING.md](CONTRIBUTING.md) for how to add an indicator or a strategy.
+
+## Example output
+
 ```
-
-Build and run the unit test suite (fast, no data dependencies — covers `trade_core` fee math, result metrics, drawdown tracking, range helpers, and TA-Lib smoke):
-```bash
-make tests
-./tests.exe
-```
-
-To run the tracked regression checks on Windows/PowerShell:
-```powershell
-powershell -File .\run_regression.ps1
-```
-
-That script runs `tests.exe` first, then compile-checks every strategy and runs the three regression harnesses — so interface drift, broken math, and numeric drift all surface quickly during refactors.
-
-## Data Format
-Data is provided in the `data` directory for several pairs and timeframes (outdated) for tests.
-
-If you want more up-to-date data you can see on the folder `data_downloader_freqtrade` a project to download data with Freqtrade and Docker as `.json` format (See `README.md` inside).
-
-## Example Results
-
-Sample output from 2-EMA crossover strategy:
-
-```
--------------------------------------
-Strategy to test: 2-EMA crossover simple
-DATA FILE TO PROCESS: ./data/BTCUSDT_1HOUR.txt
-Initialized TA-Lib !
-Initialized calculations.
--------------------------------------
-Begin day      : 2017/8/17
-End day        : 2022/7/6
-OPEN/CLOSE FEE : 0.05 %
-FUNDING FEE    : 0 %
-LEVERAGE       : 1
-Minimum number of trades required: 100
-CAN LONG : 1 ; CAN SHORT : 0
--------------------------------------
-BEST PARAMETER SET FOUND: 
--------------------------------------
-Strategy : 2-EMA crossover simple
-EMA      : 72 7
-Best Gain: 2803.38%
-Win rate : 28.0778%
-max DD   : -45.9658%
-Gain/DDC : 32.9545
-Score    : 925.289
-Number of trades: 463
--------------------------------------
-Number of backtests performed : 39402
-Time taken                    : 14 seconds 
-RAM usage                     : 43.6 MB
--------------------------------------
+--------------------------------------------------------------------------
+BEST PARAMETER SET FOUND:
+--------------------------------------------------------------------------
+Strategy         : TEMPLATE_RSI_EMA
+Parameters       :
+  RSI: 7 ; EMA: 50
+  buy<: 30.000000 ; sell>: 60.000000
+Max Open Trades  : 2
+Gain             : 98.6643%
+Porfolio         : 1986.64$ (started with 1000$)
+Win rate         : 75.5556%
+max DD           : -11.1129%
+Gain/DDC         : 7.89175
+Score            : 596.265
+Calmar ratio     : 0.826031
+Number of trades : 180
+--------------------------------------------------------------------------
 ```

@@ -37,7 +37,6 @@ string timeframe = "5m";
 
 vector<string> DATAFILES{};
 
-const float start_year = 2017; // forced year to start (applies if data below is available)
 const float FEE = 0.1f;        // FEES in %
 const float USDT_amount_initial = 1000.0f;
 
@@ -299,7 +298,7 @@ int main()
 
         const RUN_RESULTf res = PROCESS(PAIRS, para.ema1, para.ema2, para.ema3, para.up, para.down, para.SRSIL, para.max_open_trades);
 
-        if (res.score > best.score && res.gain_pc > 500.0f && res.gain_pc < 1000000.0f && res.nb_posi_entered >= MIN_NUMBER_OF_TRADES && res.max_DD > MIN_ALLOWED_MAX_DRAWBACK)
+        if (res.score > best.score && res.gain_pc > 500.0f && res.gain_pc < 1000000.0f && res.nb_posi_entered >= int(MIN_NUMBER_OF_TRADES) && res.max_DD > MIN_ALLOWED_MAX_DRAWBACK)
         {
             best = res;
         }
