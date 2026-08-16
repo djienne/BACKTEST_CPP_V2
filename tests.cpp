@@ -114,6 +114,103 @@ void test_calculate_result_metrics()
     REQUIRE_NEAR(m.ddc, 25.0f, 1e-3);
     // score = 50 / 25 * 40 = 80
     REQUIRE_NEAR(m.score, 80.0f, 1e-3);
+    REQUIRE_NEAR(m.gain_over_ddc, 2.0f, 1e-3);
+}
+
+void test_calculate_result_metrics_degenerate()
+{
+    // Regression: a parameter set that entered no position divided by zero for the win
+    // rate, and a run with zero drawdown divided by a zero ddc. Both leaked NaN/inf into
+    // the printed banner and the score file; an inf score also beat every real candidate
+    // in the sweep's `score >` ranking.
+    trade_core::TradeStats no_trades{};
+    const trade_core::ResultMetrics m0 = trade_core::calculate_result_metrics(1000.0f, 1000.0f, 0.0f, no_trades);
+    REQUIRE(std::isfinite(m0.win_rate));
+    REQUIRE(std::isfinite(m0.score));
+    REQUIRE(std::isfinite(m0.gain_over_ddc));
+    REQUIRE_NEAR(m0.win_rate, 0.0f, 1e-6);
+    REQUIRE_NEAR(m0.score, 0.0f, 1e-6);
+
+    // Trades happened but the equity curve never drew down -> ddc == 0.
+    trade_core::TradeStats winners{};
+    winners.nb_positions_entered = 10;
+    winners.nb_profit = 10;
+    const trade_core::ResultMetrics m1 = trade_core::calculate_result_metrics(2000.0f, 1000.0f, 0.0f, winners);
+    REQUIRE(std::isfinite(m1.score));
+    REQUIRE(std::isfinite(m1.gain_over_ddc));
+    REQUIRE_NEAR(m1.gain, 100.0f, 1e-3);
+    REQUIRE_NEAR(m1.win_rate, 100.0f, 1e-3);
+    REQUIRE_NEAR(m1.score, 0.0f, 1e-6);
+
+    // A populated RUN_RESULTf must stay finite too.
+    RUN_RESULTf r{};
+    trade_core::populate_common_result(r, m0, 1000.0f, 0.0f, 0.0f, no_trades, 1);
+    REQUIRE(std::isfinite(r.score));
+    REQUIRE(std::isfinite(r.gain_over_DDC));
+    REQUIRE(std::isfinite(r.win_rate));
+}
+
+void test_supertrend_dir_only_matches_full()
+{
+    // Regression: TALIB_SuperTrend_dir_only was a copy-paste of TALIB_SuperTrend. It is
+    // now a thin wrapper, so the two must agree element for element.
+    TA_Initialize();
+    const int n = 200;
+    std::vector<float> high, low, close;
+    high.reserve(n);
+    low.reserve(n);
+    close.reserve(n);
+    for (int i = 0; i < n; ++i)
+    {
+        const float base = 100.0f + 20.0f * std::sin(i * 0.15f) + 0.05f * i;
+        high.push_back(base + 1.5f);
+        low.push_back(base - 1.5f);
+        close.push_back(base);
+    }
+
+    const SuperTrend st = TALIB_SuperTrend(high, low, close, 10, 3.0f);
+    const std::vector<float> dir = TALIB_SuperTrend_dir_only(high, low, close, 10, 3.0f);
+
+    REQUIRE(st.supertrend.size() == static_cast<size_t>(n));
+    REQUIRE(dir.size() == st.supertrend.size());
+    REQUIRE(st.final_lowerband.size() == static_cast<size_t>(n));
+    REQUIRE(st.final_upperband.size() == static_cast<size_t>(n));
+
+    int mismatches = 0;
+    int saw_up = 0;
+    int saw_down = 0;
+    for (size_t i = 0; i < dir.size(); ++i)
+    {
+        if (dir[i] != static_cast<float>(st.supertrend[i]))
+        {
+            ++mismatches;
+        }
+        if (st.supertrend[i] == 1)
+        {
+            ++saw_up;
+        }
+        if (st.supertrend[i] == -1)
+        {
+            ++saw_down;
+        }
+    }
+    REQUIRE(mismatches == 0);
+    // An oscillating series must flip direction, otherwise this test proves nothing.
+    REQUIRE(saw_up > 0);
+    REQUIRE(saw_down > 0);
+
+    // Fractional multipliers are the common SuperTrend setting and used to be
+    // unreachable through the int parameter; a wider band must not flip more often.
+    const SuperTrend narrow = TALIB_SuperTrend(high, low, close, 10, 1.5f);
+    int narrow_flips = 0;
+    int wide_flips = 0;
+    for (size_t i = 1; i < dir.size(); ++i)
+    {
+        narrow_flips += (narrow.supertrend[i] != narrow.supertrend[i - 1]) ? 1 : 0;
+        wide_flips += (st.supertrend[i] != st.supertrend[i - 1]) ? 1 : 0;
+    }
+    REQUIRE(narrow_flips >= wide_flips);
+    TA_Shutdown();
 }
 
 void test_record_wallet_snapshot_drawdown()
@@ -423,6 +520,35 @@ void test_realign_timestamps_noop_when_aligned()
     REQUIRE(other.timestamp.size() == base.timestamp.size());
 }
 
+void test_random_number_generator_seeding()
+{
+    // Regression: the constructor built a local mt19937 that shadowed the member, so the
+    // member kept whatever the init-list gave it and the intended thread-id mixing was
+    // discarded. Two generators must produce different streams, and every draw must land
+    // inside [0, upperLimit].
+    RandomNumberGenerator a;
+    RandomNumberGenerator b;
+
+    std::vector<int> sa;
+    std::vector<int> sb;
+    bool in_range = true;
+    for (int i = 0; i < 64; ++i)
+    {
+        const int va = a.getRandomNumber(999);
+        const int vb = b.getRandomNumber(999);
+        in_range = in_range && va >= 0 && va <= 999 && vb >= 0 && vb <= 999;
+        sa.push_back(va);
+        sb.push_back(vb);
+    }
+    REQUIRE(in_range);
+    REQUIRE(sa != sb);
+
+    // A zero upper limit must yield exactly 0 rather than an empty-distribution surprise
+    // (the F_* sweeps call getRandomNumber(range.size() - 1) on single-element ranges).
+    RandomNumberGenerator c;
+    REQUIRE(c.getRandomNumber(0) == 0);
+}
+
 void test_strategy_runner_sweep_filters()
 {
     // Exercise the gating predicate: only results that pass all filters should
@@ -474,6 +600,9 @@ const NamedTest ALL_TESTS[] = {
     {"open_close_spot_long_fee_roundtrip", test_open_close_spot_long_fee_roundtrip},
     {"open_close_spot_long_price_up", test_open_close_spot_long_price_up},
     {"calculate_result_metrics", test_calculate_result_metrics},
+    {"calculate_result_metrics_degenerate", test_calculate_result_metrics_degenerate},
+    {"supertrend_dir_only_matches_full", test_supertrend_dir_only_matches_full},
+    {"random_number_generator_seeding", test_random_number_generator_seeding},
     {"record_wallet_snapshot_drawdown", test_record_wallet_snapshot_drawdown},
     {"futures_long_close_sign", test_futures_long_close_sign},
     {"futures_short_close_sign", test_futures_short_close_sign},

@@ -543,27 +543,30 @@ std::vector<uint> INITIALIZE_DATA(std::vector<KLINEf> &PAIRS)
         }
     }
 
-    // find initial indexes (different starting times)
+    // Find each pair's first index within the reference (index 0) series. Pairs list
+    // later than BTC, so each one starts at a different offset.
+    //
+    // The scan stops at the first hit. It previously ran to the end of the reference
+    // series and pushed an entry per match, so a repeated timestamp would append a
+    // second start index and shift every later pair's entry -- silently desynchronising
+    // start_indexes[ic] from PAIRS[ic].
     for (uint ic = 1; ic < NB_PAIRS; ic++)
     {
         bool found = false;
-        while (true)
+        for (uint i = 0; i < PAIRS[0].timestamp.size(); i++)
         {
-            for (uint i = 0; i < PAIRS[0].timestamp.size(); i++)
+            if (PAIRS[ic].timestamp[0] == PAIRS[0].timestamp[i])
             {
-                if (PAIRS[ic].timestamp[0] == PAIRS[0].timestamp[i])
-                {
-                    start_indexes.push_back(start_indexes[0] + i);
-                    std::cout << "Start for " + PAIRS[ic].name << " : " << start_indexes[0] + i << std::endl;
-                    PAIRS[ic].start_idx = start_indexes[0] + i;
-                    found = true;
-                }
-            }
-
-            if (found)
-            {
+                start_indexes.push_back(start_indexes[0] + i);
+                std::cout << "Start for " + PAIRS[ic].name << " : " << start_indexes[0] + i << std::endl;
+                PAIRS[ic].start_idx = start_indexes[0] + i;
+                found = true;
                 break;
             }
+        }
+
+        if (!found)
+        {
             BACKTEST_FATAL("INITIALIZE_DATA: could not find start index for pair " + PAIRS[ic].name);
         }
     }

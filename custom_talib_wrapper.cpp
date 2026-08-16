@@ -6,18 +6,26 @@ namespace
 using SingleInputTalibFn = TA_RetCode (*)(int, int, const float *, int, TA_Integer *, TA_Integer *, TA_Real *);
 using OhlcInputTalibFn = TA_RetCode (*)(int, int, const float *, const float *, const float *, int, TA_Integer *, TA_Integer *, TA_Real *);
 
+// Scatters TA-Lib's compacted output back into a full-length series, left-padding the
+// warmup region with zeros. The bounds check matters: TA-Lib reports where its output
+// starts (outBeg) and how many values it produced (outNbElement), and a wrong pair
+// would otherwise write straight past the end of `output`.
 std::vector<float> build_talib_output(const size_t input_size, const TA_Integer outBeg, const TA_Integer outNbElement, const std::vector<TA_Real> &raw_output, const char *indicator_name)
 {
+    if (outBeg < 0 || outNbElement < 0 ||
+        static_cast<size_t>(outBeg) + static_cast<size_t>(outNbElement) > input_size ||
+        static_cast<size_t>(outNbElement) > raw_output.size())
+    {
+        std::cerr << "FATAL " << indicator_name << ": TA-Lib returned out-of-range output window"
+                  << " (outBeg=" << outBeg << ", outNbElement=" << outNbElement
+                  << ", input_size=" << input_size << ")" << std::endl;
+        std::abort();
+    }
+
     std::vector<float> output(input_size, 0.0f);
     for (TA_Integer ii = 0; ii < outNbElement; ++ii)
     {
         output[static_cast<size_t>(outBeg + ii)] = raw_output[static_cast<size_t>(ii)];
-    }
-
-    if (output.size() != input_size)
-    {
-        std::cout << "error in " << indicator_name << std::endl;
-        std::abort();
     }
 
     return output;
@@ -52,6 +60,16 @@ std::vector<float> run_single_input_indicator(const std::vector<float> &vals, co
 
 std::vector<float> run_ohlc_indicator(const std::vector<float> &high, const std::vector<float> &low, const std::vector<float> &close, const int period, OhlcInputTalibFn indicator, const char *indicator_name)
 {
+    // Checked before the call, not after: TA-Lib reads high/low/close up to close.size(),
+    // so a short high or low array would already have been read out of bounds by the
+    // time a post-hoc size comparison could notice.
+    if (high.size() != close.size() || low.size() != close.size())
+    {
+        std::cerr << "FATAL " << indicator_name << ": OHLC input size mismatch"
+                  << " (high=" << high.size() << ", low=" << low.size() << ", close=" << close.size() << ")" << std::endl;
+        std::abort();
+    }
+
     if (close.empty())
     {
         return {};
@@ -74,15 +92,7 @@ std::vector<float> run_ohlc_indicator(const std::vector<float> &high, const std:
         std::abort();
     }
 
-    const std::vector<float> output = build_talib_output(close.size(), outBeg, outNbElement, raw_output, indicator_name);
-    if (output.size() != high.size() || output.size() != low.size() || output.size() != close.size())
-    {
-        std::cout << "error in " << indicator_name << std::endl;
-        std::cout << output.size() << " " << low.size() << " " << close.size() << " " << high.size() << std::endl;
-        std::abort();
-    }
-
-    return output;
+    return build_talib_output(close.size(), outBeg, outNbElement, raw_output, indicator_name);
 }
 } // namespace
 //////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
@@ -206,45 +216,29 @@ std::vector<float> TALIB_TRIX(const std::vector<float> &vals, const int trixLeng
 }
 
 //////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
+// Single implementation behind both public entry points. The `_dir_only` variant used
+// to be a verbatim copy of this function differing only in its return type, and both
+// copies also built three series (trend/long/short) that neither of them returned.
 SuperTrend TALIB_SuperTrend(const std::vector<float> &high, const std::vector<float> &low, const std::vector<float> &close,
-                            const int atr_window, const int atr_multi)
+                            const int atr_window, const float atr_multi)
 {
-    vector<float> hl2{};
+    const uint m = close.size();
+
     vector<float> upperband{};
     vector<float> lowerband{};
-    vector<int> dir{};
-    vector<float> trend{};
-    vector<float> longg{};
-    vector<float> shortt{};
-    vector<float> matr{};
-    hl2.reserve(high.size());
-    upperband.reserve(high.size());
-    lowerband.reserve(high.size());
-    dir.reserve(high.size());
-    trend.reserve(high.size());
-    longg.reserve(high.size());
-    shortt.reserve(high.size());
-    matr.reserve(high.size());
+    vector<int> dir(m, 1);
+    upperband.reserve(m);
+    lowerband.reserve(m);
 
     const vector<float> ATR = TALIB_ATR(high, low, close, atr_window);
 
-    const uint m = close.size();
-
     for (uint ii = 0; ii < m; ii++)
     {
-        dir.push_back(1);
-        trend.push_back(0.0);
-        longg.push_back(NAN);
-        shortt.push_back(NAN);
-    }
-
-    for (uint ii = 0; ii < m; ii++)
-    {
-        // HL2 is the average of high and low prices
-        hl2.push_back((high[ii] + low[ii]) / 2.0f);
-        matr.push_back(float(atr_multi) * ATR[ii]);
-        upperband.push_back(hl2.back() + matr.back());
-        lowerband.push_back(hl2.back() - matr.back());
+        // HL2, the midpoint of the bar, is the band centreline.
+        const float hl2 = (high[ii] + low[ii]) / 2.0f;
+        const float matr = atr_multi * ATR[ii];
+        upperband.push_back(hl2 + matr);
+        lowerband.push_back(hl2 - matr);
     }
 
     for (uint ii = 1; ii < m; ii++)
@@ -259,6 +253,8 @@ SuperTrend TALIB_SuperTrend(const std::vector<float> &high, const std::vector<fl
         }
         else
         {
+            // Inside the bands: hold the previous direction and ratchet the active band
+            // so it only ever moves in the trend's favour.
             dir[ii] = dir[ii - 1];
             if (dir[ii] > 0 && lowerband[ii] < lowerband[ii - 1])
             {
@@ -268,17 +264,6 @@ SuperTrend TALIB_SuperTrend(const std::vector<float> &high, const std::vector<fl
             {
                 upperband[ii] = upperband[ii - 1];
             }
-        }
-
-        if (dir[ii] > 0)
-        {
-            trend[ii] = lowerband[ii];
-            longg[ii] = lowerband[ii];
-        }
-        else
-        {
-            trend[ii] = upperband[ii];
-            shortt[ii] = upperband[ii];
         }
     }
 
@@ -287,82 +272,10 @@ SuperTrend TALIB_SuperTrend(const std::vector<float> &high, const std::vector<fl
 
 //////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 std::vector<float> TALIB_SuperTrend_dir_only(const std::vector<float> &high, const std::vector<float> &low, const std::vector<float> &close,
-                                             const int atr_window, const int atr_multi)
+                                             const int atr_window, const float atr_multi)
 {
-    vector<float> hl2{};
-    vector<float> upperband{};
-    vector<float> lowerband{};
-    vector<float> dir{};
-    vector<float> trend{};
-    vector<float> longg{};
-    vector<float> shortt{};
-    vector<float> matr{};
-    hl2.reserve(high.size());
-    upperband.reserve(high.size());
-    lowerband.reserve(high.size());
-    dir.reserve(high.size());
-    trend.reserve(high.size());
-    longg.reserve(high.size());
-    shortt.reserve(high.size());
-    matr.reserve(high.size());
-
-    const vector<float> ATR = TALIB_ATR(high, low, close, atr_window);
-
-    const uint m = close.size();
-
-    for (uint ii = 0; ii < m; ii++)
-    {
-        dir.push_back(1.0);
-        trend.push_back(0.0);
-        longg.push_back(NAN);
-        shortt.push_back(NAN);
-    }
-
-    for (uint ii = 0; ii < m; ii++)
-    {
-        // HL2 is the average of high and low prices
-        hl2.push_back((high[ii] + low[ii]) / 2.0f);
-        matr.push_back(float(atr_multi) * ATR[ii]);
-        upperband.push_back(hl2.back() + matr.back());
-        lowerband.push_back(hl2.back() - matr.back());
-    }
-
-    for (uint ii = 1; ii < m; ii++)
-    {
-        if (close[ii] > upperband[ii - 1])
-        {
-            dir[ii] = 1;
-        }
-        else if (close[ii] < lowerband[ii - 1])
-        {
-            dir[ii] = -1;
-        }
-        else
-        {
-            dir[ii] = dir[ii - 1];
-            if (dir[ii] > 0 && lowerband[ii] < lowerband[ii - 1])
-            {
-                lowerband[ii] = lowerband[ii - 1];
-            }
-            if (dir[ii] < 0 && upperband[ii] > upperband[ii - 1])
-            {
-                upperband[ii] = upperband[ii - 1];
-            }
-        }
-
-        if (dir[ii] > 0)
-        {
-            trend[ii] = lowerband[ii];
-            longg[ii] = lowerband[ii];
-        }
-        else
-        {
-            trend[ii] = upperband[ii];
-            shortt[ii] = upperband[ii];
-        }
-    }
-
-    return dir;
+    const std::vector<int> dir = TALIB_SuperTrend(high, low, close, atr_window, atr_multi).supertrend;
+    return std::vector<float>(dir.begin(), dir.end());
 }
 
 //////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////

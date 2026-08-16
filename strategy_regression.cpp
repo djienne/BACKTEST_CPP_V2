@@ -106,7 +106,7 @@ trade_core::ResultMetrics run_multi_pair_case()
     std::cout << "MULTI_SPOT_GAIN " << metrics.gain << "\n";
     std::cout << "MULTI_SPOT_WIN_RATE " << metrics.win_rate << "\n";
     std::cout << "MULTI_SPOT_MAX_DD " << portfolio.max_drawdown << "\n";
-    std::cout << "MULTI_SPOT_GAIN_OVER_DDC " << (metrics.gain / metrics.ddc) << "\n";
+    std::cout << "MULTI_SPOT_GAIN_OVER_DDC " << metrics.gain_over_ddc << "\n";
     std::cout << "MULTI_SPOT_SCORE " << metrics.score << "\n";
     std::cout << "MULTI_SPOT_TRADES " << stats.nb_positions_entered << "\n";
 

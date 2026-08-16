@@ -278,12 +278,17 @@ int main()
         const int i6 = rng1.getRandomNumber(range_STOCH_RSI_LOWER.size() - 1);
         const int i7 = rng1.getRandomNumber(MAX_OPEN_TRADES_TO_TEST.size() - 1);
 
+        // EMA3_params has eight members. This initializer used to supply seven, so
+        // MAX_OPEN_TRADES_TO_TEST[i7] landed in SRSIU and max_open_trades defaulted to
+        // 0 -- which made `active_positions < MAX_OPEN_TRADES` always false and stopped
+        // this strategy from ever opening a position.
         const EMA3_params para{range_EMA1[i1],
                                range_EMA2[i2],
                                range_EMA3[i3],
                                range_UP[i4],
                                range_DOWN[i5],
                                range_STOCH_RSI_LOWER[i6],
+                               0.0f, // SRSIU: this strategy gates on the lower band only
                                MAX_OPEN_TRADES_TO_TEST[i7]};
 
         if (para.ema3 < para.ema2 || para.ema3 < para.ema1 || para.ema2 < para.ema1 || std::abs(para.ema2 - para.ema1) < 5 || std::abs(para.ema3 - para.ema1) < 5 || std::abs(para.ema2 - para.ema3) < 5)

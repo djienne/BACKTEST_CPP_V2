@@ -44,10 +44,12 @@ std::vector<float> TALIB_STOCHRSI_not_averaged(const std::vector<float> &vals, c
 
 //////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 
+// atr_multi is a float so fractional multipliers (1.5, 2.5, ...) can be swept; it used
+// to be an int, which silently excluded the most common SuperTrend settings.
 SuperTrend TALIB_SuperTrend(const std::vector<float> &high, const std::vector<float> &low, const std::vector<float> &close,
-                            const int atr_window, const int atr_multi);
+                            const int atr_window, const float atr_multi);
 std::vector<float> TALIB_SuperTrend_dir_only(const std::vector<float> &high, const std::vector<float> &low, const std::vector<float> &close,
-                                             const int atr_window, const int atr_multi);
+                                             const int atr_window, const float atr_multi);
 //////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 std::vector<float> TALIB_AO(const std::vector<float> &high, const std::vector<float> &low,
                             const int fast, const int slow);

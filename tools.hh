@@ -257,11 +257,15 @@ std::vector<T> combineAndRemoveDuplicates(const std::vector<T> &vec1, const std:
 class RandomNumberGenerator
 {
 public:
-    RandomNumberGenerator() : rng(std::random_device()())
+    // The thread id is mixed into the seed so that two workers constructing a generator
+    // in the same tick still diverge. Previously the constructor body built a *local*
+    // mt19937 that shadowed the member and was then discarded, so this mixing never
+    // took effect and the seed printed below was not the one actually in use.
+    RandomNumberGenerator()
     {
         std::random_device rd;
-        std::mt19937::result_type seed = rd() + std::hash<std::thread::id>{}(std::this_thread::get_id());
-        std::mt19937 rng(seed);
+        const std::mt19937::result_type seed = rd() + std::hash<std::thread::id>{}(std::this_thread::get_id());
+        rng.seed(seed);
 
         std::cout << "Thread " << std::this_thread::get_id() << ": Random number seed = " << seed << std::endl;
     }

@@ -19,11 +19,16 @@ struct WalletTrace
     std::vector<int> timestamps{};
 };
 
+// All fields are guaranteed finite: calculate_result_metrics() special-cases the
+// degenerate inputs (no trades, no drawdown) rather than letting 0/0 or x/0 through.
+// This matters because the sweep ranks candidates with `score >`, and a single inf
+// would beat every real result while a NaN would silently never be selected.
 struct ResultMetrics
 {
     float gain = 0.0f;
     float win_rate = 0.0f;
     float ddc = 0.0f;
+    float gain_over_ddc = 0.0f;
     float score = 0.0f;
 };
 
