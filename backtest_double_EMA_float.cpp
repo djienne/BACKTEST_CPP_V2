@@ -49,7 +49,7 @@ void print_best_res(const RUN_RESULTf best)
     const int last_month = get_month_from_timestamp(kline.timestamp[last_idx]);
     const int last_day = get_day_from_timestamp(kline.timestamp[last_idx]);
 
-    std::time_t difference = std::abs(int(kline.timestamp[last_idx]) - int(kline.timestamp[0]));
+    std::time_t difference = std::abs(kline.timestamp[last_idx] - kline.timestamp[0]);
     const int days = difference / (24 * 60 * 60);
 
     // Display info
@@ -145,7 +145,7 @@ RUN_RESULTf PROCESS(const KLINEf &kline_data, const int ema1_v, const int ema2_v
         {
             trade_core::close_spot_long(portfolio, stats, 0, close[ii], FEE);
 
-            const float wallet_val_usdt = portfolio.usdt_amount;
+            const double wallet_val_usdt = portfolio.usdt_amount;
             if (wallet_val_usdt > portfolio.max_wallet_val_usdt)
             {
                 portfolio.max_wallet_val_usdt = wallet_val_usdt;
@@ -163,7 +163,7 @@ RUN_RESULTf PROCESS(const KLINEf &kline_data, const int ema1_v, const int ema2_v
         }
     }
 
-    const float wallet_val_usdt = portfolio.usdt_amount;
+    const double wallet_val_usdt = portfolio.usdt_amount;
     const trade_core::ResultMetrics metrics = trade_core::calculate_result_metrics(wallet_val_usdt, USDT_amount_initial, portfolio.max_drawdown, stats);
 
     i_print++;

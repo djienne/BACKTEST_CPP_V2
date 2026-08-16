@@ -71,35 +71,61 @@ int g_run_count = 0;
 void test_open_close_spot_long_fee_roundtrip()
 {
     // Open then close at flat price: wallet should end at initial * (1-fee)^2.
-    constexpr float initial = 1000.0f;
-    constexpr float price = 100.0f;
-    constexpr float fee = 0.1f;
-    constexpr float f = fee / 100.0f;
+    // The tolerances here are 1e-9 rather than the 1e-2 the float wallet needed --
+    // that gap is the point of accumulating money in double.
+    constexpr double initial = 1000.0;
+    constexpr double price = 100.0;
+    constexpr double fee = 0.1;
+    constexpr double f = fee / 100.0;
     trade_core::PortfolioState<1> state(initial);
     trade_core::TradeStats stats{};
     trade_core::open_spot_long(state, stats, 0, price, fee, 1);
-    REQUIRE_NEAR(state.usdt_amount, 0.0f, 1e-4);
-    REQUIRE(state.coin_amounts[0] > 0.0f);
+    REQUIRE_NEAR(state.usdt_amount, 0.0, 1e-9);
+    REQUIRE(state.coin_amounts[0] > 0.0);
     trade_core::close_spot_long(state, stats, 0, price, fee);
-    REQUIRE_NEAR(state.usdt_amount, initial * (1.0f - f) * (1.0f - f), 1e-2);
-    REQUIRE_NEAR(state.coin_amounts[0], 0.0f, 1e-6);
+    REQUIRE_NEAR(state.usdt_amount, initial * (1.0 - f) * (1.0 - f), 1e-9);
+    REQUIRE_NEAR(state.coin_amounts[0], 0.0, 1e-12);
     REQUIRE(stats.nb_positions_entered == 1);
     REQUIRE(stats.nb_profit + stats.nb_loss == 1);
 }
 
 void test_open_close_spot_long_price_up()
 {
-    // Price doubles during the hold: wallet ≈ 2 * initial * (1-fee)^2.
-    constexpr float initial = 1000.0f;
-    constexpr float fee = 0.1f;
-    constexpr float f = fee / 100.0f;
+    // Price doubles during the hold: wallet = 2 * initial * (1-fee)^2.
+    constexpr double initial = 1000.0;
+    constexpr double fee = 0.1;
+    constexpr double f = fee / 100.0;
     trade_core::PortfolioState<1> state(initial);
     trade_core::TradeStats stats{};
-    trade_core::open_spot_long(state, stats, 0, 100.0f, fee, 1);
-    trade_core::close_spot_long(state, stats, 0, 200.0f, fee);
-    REQUIRE_NEAR(state.usdt_amount, 2.0f * initial * (1.0f - f) * (1.0f - f), 1e-2);
+    trade_core::open_spot_long(state, stats, 0, 100.0, fee, 1);
+    trade_core::close_spot_long(state, stats, 0, 200.0, fee);
+    REQUIRE_NEAR(state.usdt_amount, 2.0 * initial * (1.0 - f) * (1.0 - f), 1e-9);
     REQUIRE(stats.nb_profit == 1);
     REQUIRE(stats.nb_loss == 0);
+}
+
+void test_wallet_precision_over_many_roundtrips()
+{
+    // Regression for the float wallet: 5000 flat-price round-trips at a 0.1% fee. The
+    // closed form is initial * (1-f)^(2*n), and with a float accumulator the running
+    // balance drifted off it well beyond any sane tolerance. Double must track it.
+    constexpr double initial = 1000.0;
+    constexpr double fee = 0.1;
+    constexpr double f = fee / 100.0;
+    constexpr int n = 5000;
+
+    trade_core::PortfolioState<1> state(initial);
+    trade_core::TradeStats stats{};
+    for (int i = 0; i < n; ++i)
+    {
+        trade_core::open_spot_long(state, stats, 0, 100.0, fee, 1);
+        trade_core::close_spot_long(state, stats, 0, 100.0, fee);
+    }
+
+    const double expected = initial * std::pow(1.0 - f, 2 * n);
+    REQUIRE(stats.nb_positions_entered == n);
+    // Relative error must stay near machine epsilon rather than float's ~1e-7 per op.
+    REQUIRE(std::fabs(state.usdt_amount - expected) / expected < 1e-12);
 }
 
 void test_calculate_result_metrics()
@@ -216,8 +242,8 @@ void test_supertrend_dir_only_matches_full()
 void test_record_wallet_snapshot_drawdown()
 {
     trade_core::WalletTrace trace{};
-    float max_val = 1000.0f;
-    float max_dd = 0.0f;
+    double max_val = 1000.0;
+    double max_dd = 0.0;
 
     // ATH at 1000
     trade_core::record_wallet_snapshot(1000.0f, 1, max_val, max_dd, trace);
@@ -441,52 +467,110 @@ void test_talib_stochrsi_range()
 
 void test_apply_funding_fee()
 {
-    constexpr float fee = 0.0001f; // 0.01%
-    trade_core::PortfolioState<1> state(1000.0f);
+    constexpr double fee = 0.0001; // 0.01%
+    trade_core::PortfolioState<1> state(1000.0);
     // No position -> apply_funding_fee should not change anything.
-    trade_core::apply_funding_fee(state, 0, 100.0f, fee);
-    REQUIRE_NEAR(state.usdt_amount, 1000.0f, 1e-6);
-    REQUIRE_NEAR(state.total_fees_paid_usdt, 0.0f, 1e-6);
+    trade_core::apply_funding_fee(state, 0, 100.0, fee);
+    REQUIRE_NEAR(state.usdt_amount, 1000.0, 1e-12);
+    REQUIRE_NEAR(state.total_fees_paid_usdt, 0.0, 1e-12);
 
     // Simulate a long position of 1 coin at price 100. Positive funding debits USDT.
-    state.coin_amounts[0] = 1.0f;
-    state.price_position_open[0] = 100.0f;
-    const float before = state.usdt_amount;
-    trade_core::apply_funding_fee(state, 0, 110.0f, fee);
-    const float expected_deduction = 1.0f * 110.0f * fee;
-    REQUIRE_NEAR(before - state.usdt_amount, expected_deduction, 1e-4);
-    REQUIRE_NEAR(state.total_fees_paid_usdt, expected_deduction, 1e-4);
+    state.coin_amounts[0] = 1.0;
+    state.price_position_open[0] = 100.0;
+    // double, matching PortfolioState: capturing the balance in a float here would
+    // reintroduce exactly the rounding this change removes.
+    const double before = state.usdt_amount;
+    trade_core::apply_funding_fee(state, 0, 110.0, fee);
+    const double expected_deduction = 1.0 * 110.0 * fee;
+    REQUIRE_NEAR(before - state.usdt_amount, expected_deduction, 1e-9);
+    REQUIRE_NEAR(state.total_fees_paid_usdt, expected_deduction, 1e-9);
 
     // Zero funding -> no-op even with a position.
-    const float after = state.usdt_amount;
-    trade_core::apply_funding_fee(state, 0, 120.0f, 0.0f);
-    REQUIRE_NEAR(state.usdt_amount, after, 1e-6);
+    const double after = state.usdt_amount;
+    trade_core::apply_funding_fee(state, 0, 120.0, 0.0);
+    REQUIRE_NEAR(state.usdt_amount, after, 1e-12);
 }
 
 void test_calculate_calmar_ratio()
 {
     // Synthetic: ATH then flat over ~3 years. Build timestamps monthly.
-    std::vector<int> ts;
-    std::vector<float> wv;
-    const int seconds_per_month = 30 * 24 * 3600;
-    const int base = 1577836800; // 2020-01-01 00:00 UTC
+    std::vector<int64_t> ts;
+    std::vector<double> wv;
+    const int64_t seconds_per_month = 30 * 24 * 3600;
+    const int64_t base = 1577836800; // 2020-01-01 00:00 UTC
     for (int m = 0; m < 36; ++m)
     {
         ts.push_back(base + m * seconds_per_month);
-        wv.push_back(1000.0f + 10.0f * m); // +1% per month roughly
+        wv.push_back(1000.0 + 10.0 * m); // +1% per month roughly
     }
-    // Feed a known max_DD; function normalizes averaged yearly gain by it.
-    const float cr = calculate_calmar_ratio(ts, wv, -10.0f);
-    // With +1%/mo over ~3 years the mean yearly return should be positive and
-    // dividing by a negative DD yields a negative Calmar in this function's sign
-    // convention — we only check the math is finite and non-degenerate.
+    // Callers pass ResultMetrics::ddc (positive) as the normalizer.
+    const double cr = calculate_calmar_ratio(ts, wv, 10.0);
     REQUIRE(std::isfinite(cr));
-    REQUIRE(cr != 0.0f);
+    REQUIRE(cr > 0.0);
 
     // Too-short series (<= 4 points) returns the sentinel -100.
-    const std::vector<int> short_ts{1, 2, 3};
-    const std::vector<float> short_wv{1.0f, 2.0f, 3.0f};
-    REQUIRE_NEAR(calculate_calmar_ratio(short_ts, short_wv, -10.0f), -100.0f, 1e-6);
+    const std::vector<int64_t> short_ts{1, 2, 3};
+    const std::vector<double> short_wv{1.0, 2.0, 3.0};
+    REQUIRE_NEAR(calculate_calmar_ratio(short_ts, short_wv, 10.0), -100.0, 1e-6);
+
+    // A non-positive normalizer (zero drawdown) must not divide by zero.
+    REQUIRE_NEAR(calculate_calmar_ratio(ts, wv, 0.0), -100.0, 1e-6);
+    REQUIRE(std::isfinite(calculate_calmar_ratio_monthly(ts, wv, 0.0)));
+}
+
+void test_generate_range_int()
+{
+    // Regression: the step was an integer division, so the range never reached vmax.
+    // generateRange_int(3, 600, 300) used to yield 3..302 -- half the intended sweep
+    // space, silently -- and N == 1 divided by zero.
+    const std::vector<int> r = generateRange_int(3, 600, 300);
+    REQUIRE(r.front() == 3);
+    REQUIRE(r.back() == 600);
+    REQUIRE(r.size() == 300);
+
+    const std::vector<int> r2 = generateRange_int(5, 400, 120);
+    REQUIRE(r2.front() == 5);
+    REQUIRE(r2.back() == 400);
+
+    // Monotonically non-decreasing and strictly increasing after dedup.
+    bool increasing = true;
+    for (size_t i = 1; i < r.size(); ++i)
+    {
+        increasing = increasing && r[i] > r[i - 1];
+    }
+    REQUIRE(increasing);
+
+    // N == 1 is the old divide-by-zero.
+    const std::vector<int> r3 = generateRange_int(7, 99, 1);
+    REQUIRE(r3.size() == 1);
+    REQUIRE(r3[0] == 7);
+
+    // More points requested than the interval holds: deduplicated, endpoints kept.
+    const std::vector<int> r4 = generateRange_int(1, 3, 10);
+    REQUIRE(r4.front() == 1);
+    REQUIRE(r4.back() == 3);
+    REQUIRE(r4.size() == 3);
+}
+
+void test_utc_timestamp_helpers()
+{
+    // Regression: these used localtime(), so results depended on the host timezone and
+    // raced on the shared static tm from the F_* worker threads. Exchange klines are
+    // UTC, so these must read UTC regardless of TZ.
+    // 2023-06-18 16:00:00 UTC.
+    const int64_t ts = 1687104000;
+    REQUIRE(get_year_from_timestamp(ts) == 2023);
+    REQUIRE(get_month_from_timestamp(ts) == 6);
+    REQUIRE(get_day_from_timestamp(ts) == 18);
+    REQUIRE(get_hour_from_timestamp(ts) == 16);
+
+    // A timestamp beyond the 2038 signed-32-bit boundary must still resolve, which the
+    // previous `int` parameters made impossible.
+    // 2040-01-01 00:00:00 UTC.
+    const int64_t ts_2040 = 2208988800;
+    REQUIRE(get_year_from_timestamp(ts_2040) == 2040);
+    REQUIRE(get_month_from_timestamp(ts_2040) == 1);
+    REQUIRE(get_day_from_timestamp(ts_2040) == 1);
 }
 
 void test_realign_timestamps_noop_when_aligned()
@@ -599,6 +683,7 @@ struct NamedTest
 const NamedTest ALL_TESTS[] = {
     {"open_close_spot_long_fee_roundtrip", test_open_close_spot_long_fee_roundtrip},
     {"open_close_spot_long_price_up", test_open_close_spot_long_price_up},
+    {"wallet_precision_over_many_roundtrips", test_wallet_precision_over_many_roundtrips},
     {"calculate_result_metrics", test_calculate_result_metrics},
     {"calculate_result_metrics_degenerate", test_calculate_result_metrics_degenerate},
     {"supertrend_dir_only_matches_full", test_supertrend_dir_only_matches_full},
@@ -607,6 +692,8 @@ const NamedTest ALL_TESTS[] = {
     {"futures_long_close_sign", test_futures_long_close_sign},
     {"futures_short_close_sign", test_futures_short_close_sign},
     {"integer_range", test_integer_range},
+    {"generate_range_int", test_generate_range_int},
+    {"utc_timestamp_helpers", test_utc_timestamp_helpers},
     {"float_range_N1", test_float_range_N1},
     {"find_max_all_negative", test_find_max_all_negative},
     {"find_min_all_positive", test_find_min_all_positive},

@@ -95,7 +95,7 @@ RUN_RESULTf PROCESS(const std::vector<KLINEf> &PAIRS, const int &ema1, const int
 
     bool LAST_ITERATION = false;
     array<float, NB_PAIRS> ATR_AT_OPEN{};
-    array<uint, NB_PAIRS> OPEN_TS{};
+    array<int64_t, NB_PAIRS> OPEN_TS{};
 
     const uint ii_begin = start_indexes[0];
 
@@ -187,7 +187,7 @@ RUN_RESULTf PROCESS(const std::vector<KLINEf> &PAIRS, const int &ema1, const int
         last_closes[ic] = PAIRS[ic].close[nb_max - 1];
     }
 
-    const float wallet_val_usdt = trade_core::calculate_spot_wallet_val_usdt(portfolio, last_closes);
+    const double wallet_val_usdt = trade_core::calculate_spot_wallet_val_usdt(portfolio, last_closes);
 
     const trade_core::ResultMetrics metrics = trade_core::calculate_result_metrics(wallet_val_usdt, USDT_amount_initial, portfolio.max_drawdown, stats);
 

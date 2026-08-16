@@ -24,6 +24,15 @@ float find_average(const std::vector<float> &vec)
     return std::accumulate(vec.begin(), vec.end(), 0.0f) / static_cast<float>(vec.size());
 }
 
+double find_average(const std::vector<double> &vec)
+{
+    if (vec.empty())
+    {
+        return 0.0;
+    }
+    return std::accumulate(vec.begin(), vec.end(), 0.0) / static_cast<double>(vec.size());
+}
+
 //////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 
 float find_min(const std::vector<float> &vec)
@@ -59,59 +68,52 @@ int find_max(const std::vector<int> &vec)
 }
 //////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 
-int get_hour_from_timestamp(const int timestamp)
+// All calendar fields are derived in UTC via the reentrant gmtime_r.
+//
+// Two bugs are fixed here at once. localtime()/gmtime() return a pointer to a shared
+// static tm, so the multithreaded F_* strategies raced on it through
+// calculate_calmar_ratio. And localtime() made every result depend on the host's
+// timezone: the same data and parameters produced different year/month/day boundaries
+// -- and so different Calmar ratios and month-rollover snapshots -- on two machines.
+// Exchange kline timestamps are UTC, so UTC is the correct reading of them.
+//
+// Reading the tm fields directly also replaces a strftime()-then-std::stoi() round-trip
+// per call, which these helpers do once or twice per candle in the hot loops.
+namespace
 {
-    time_t rawtime = timestamp;
-    struct tm ts;
-    char buf[80];
+std::tm utc_tm_from_timestamp(const int64_t timestamp)
+{
+    const std::time_t raw = static_cast<std::time_t>(timestamp);
+    std::tm out{};
+    gmtime_r(&raw, &out);
+    return out;
+}
+} // namespace
 
-    // Format time, "ddd yyyy-mm-dd hh:mm:ss zzz" ->  "%a %Y-%m-%d %H:%M:%S %Z"
-    ts = *localtime(&rawtime);
-    strftime(buf, sizeof(buf), "%H", &ts);
-
-    return std::stoi(buf);
+int get_hour_from_timestamp(const int64_t timestamp)
+{
+    return utc_tm_from_timestamp(timestamp).tm_hour;
 }
 
 //////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 
-int get_year_from_timestamp(const int timestamp)
+int get_year_from_timestamp(const int64_t timestamp)
 {
-    time_t rawtime = timestamp;
-    struct tm ts;
-    char buf[80];
-
-    // Format time, "ddd yyyy-mm-dd hh:mm:ss zzz"
-    ts = *localtime(&rawtime);
-    strftime(buf, sizeof(buf), "%Y", &ts);
-
-    return std::stoi(buf);
+    return utc_tm_from_timestamp(timestamp).tm_year + 1900; // tm_year counts from 1900
 }
 
 //////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 
-int get_month_from_timestamp(const int &timestamp)
+int get_month_from_timestamp(const int64_t timestamp)
 {
-    const std::time_t timestamp_t = static_cast<std::time_t>(timestamp);
-    // Convert the timestamp to a struct tm
-    const std::tm *timeinfo = std::localtime(&timestamp_t);
-    // Extract the month number
-    const int month = timeinfo->tm_mon + 1; // Adding 1 since tm_mon ranges from 0 to 11
-    return month;
+    return utc_tm_from_timestamp(timestamp).tm_mon + 1; // tm_mon ranges 0..11
 }
 
 //////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 
-int get_day_from_timestamp(const int timestamp)
+int get_day_from_timestamp(const int64_t timestamp)
 {
-    time_t rawtime = timestamp;
-    struct tm ts;
-    char buf[80];
-
-    // Format time, "ddd yyyy-mm-dd hh:mm:ss zzz"
-    ts = *localtime(&rawtime);
-    strftime(buf, sizeof(buf), "%d", &ts);
-
-    return std::stoi(buf);
+    return utc_tm_from_timestamp(timestamp).tm_mday;
 }
 
 //////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
@@ -212,24 +214,24 @@ std::string ReplaceAll(std::string str, const std::string &from, const std::stri
 
 //////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 
-float calculate_calmar_ratio(const std::vector<int> &times, const std::vector<float> &wallet_vals, const float &max_DD)
+double calculate_calmar_ratio(const std::vector<int64_t> &times, const std::vector<double> &wallet_vals, const double drawdown_normalizer)
 {
 
     if (times.size() <= 4)
         return -100.0;
 
     const uint last_idx = times.size() - 1;
-    const int first_year = get_year_from_timestamp(times[0]);
     const int first_month = get_month_from_timestamp(times[0]);
     const int first_day = get_day_from_timestamp(times[0]);
-    const int last_year = get_year_from_timestamp(times[last_idx]);
     const int last_month = get_month_from_timestamp(times[last_idx]);
     const int last_day = get_day_from_timestamp(times[last_idx]);
 
-    const float factor_first_year = (365.0f - float(first_month) * 30.0f - float(first_day)) / 365.0f;
-    const float factor_last_year = (float(last_month) * 30.0f + float(last_day)) / 365.0f;
+    // The first and last calendar years are usually partial, so their returns are
+    // pro-rated by the fraction of the year actually covered.
+    const double factor_first_year = (365.0 - double(first_month) * 30.0 - double(first_day)) / 365.0;
+    const double factor_last_year = (double(last_month) * 30.0 + double(last_day)) / 365.0;
 
-    std::vector<float> vals_begin_years{};
+    std::vector<double> vals_begin_years{};
     vals_begin_years.reserve(10);
 
     vals_begin_years.push_back(1000.0);
@@ -245,39 +247,40 @@ float calculate_calmar_ratio(const std::vector<int> &times, const std::vector<fl
         }
     }
 
-    std::vector<float> yearly_pc_changes{};
+    std::vector<double> yearly_pc_changes{};
     yearly_pc_changes.reserve(10);
     for (uint iy = 1; iy < vals_begin_years.size(); iy++)
     {
-        yearly_pc_changes.push_back((vals_begin_years[iy] - vals_begin_years[iy - 1]) / vals_begin_years[iy - 1] * 100.0f);
+        yearly_pc_changes.push_back((vals_begin_years[iy] - vals_begin_years[iy - 1]) / vals_begin_years[iy - 1] * 100.0);
+    }
+
+    if (yearly_pc_changes.empty() || !(drawdown_normalizer > 0.0))
+    {
+        return -100.0;
     }
 
     yearly_pc_changes[0] = yearly_pc_changes[0] * factor_first_year;
     yearly_pc_changes[yearly_pc_changes.size() - 1] = yearly_pc_changes[yearly_pc_changes.size() - 1] * factor_last_year;
 
-    return find_average(yearly_pc_changes) / max_DD;
+    return find_average(yearly_pc_changes) / drawdown_normalizer;
 }
 
 //////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 
-float calculate_calmar_ratio_monthly(const std::vector<int> &times, const std::vector<float> &wallet_vals, const float &max_DD)
+double calculate_calmar_ratio_monthly(const std::vector<int64_t> &times, const std::vector<double> &wallet_vals, const double drawdown_normalizer)
 {
 
     if (times.size() <= 4)
         return -100.0;
 
     const uint last_idx = times.size() - 1;
-    const int first_year = get_year_from_timestamp(times[0]);
-    const int first_month = get_month_from_timestamp(times[0]);
     const int first_day = get_day_from_timestamp(times[0]);
-    const int last_year = get_year_from_timestamp(times[last_idx]);
-    const int last_month = get_month_from_timestamp(times[last_idx]);
     const int last_day = get_day_from_timestamp(times[last_idx]);
 
-    const float factor_first_month = (12.0f - float(first_day) / 30.0f) / 12.0f;
-    const float factor_last_month = (float(last_day) / 30.0f) / 12.0f;
+    const double factor_first_month = (12.0 - double(first_day) / 30.0) / 12.0;
+    const double factor_last_month = (double(last_day) / 30.0) / 12.0;
 
-    std::vector<float> vals_begin_months{};
+    std::vector<double> vals_begin_months{};
     vals_begin_months.reserve(50);
 
     vals_begin_months.push_back(1000.0);
@@ -293,17 +296,22 @@ float calculate_calmar_ratio_monthly(const std::vector<int> &times, const std::v
         }
     }
 
-    std::vector<float> monthly_pc_changes{};
+    std::vector<double> monthly_pc_changes{};
     monthly_pc_changes.reserve(10);
     for (uint iy = 1; iy < vals_begin_months.size(); iy++)
     {
-        monthly_pc_changes.push_back((vals_begin_months[iy] - vals_begin_months[iy - 1]) / vals_begin_months[iy - 1] * 100.0f);
+        monthly_pc_changes.push_back((vals_begin_months[iy] - vals_begin_months[iy - 1]) / vals_begin_months[iy - 1] * 100.0);
+    }
+
+    if (monthly_pc_changes.empty() || !(drawdown_normalizer > 0.0))
+    {
+        return -100.0;
     }
 
     monthly_pc_changes[0] = monthly_pc_changes[0] * factor_first_month;
     monthly_pc_changes[monthly_pc_changes.size() - 1] = monthly_pc_changes[monthly_pc_changes.size() - 1] * factor_last_month;
 
-    return find_average(monthly_pc_changes) / max_DD * 12.0;
+    return find_average(monthly_pc_changes) / drawdown_normalizer * 12.0;
 }
 
 //////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
@@ -850,19 +858,24 @@ std::vector<float> duplicateElements(const std::vector<float> &inputVector, cons
 
 //////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 
-bool isTimestampAtFundingTimes(const int64_t &timestamp)
+// Perpetual funding settles at 00:00, 08:00 and 16:00 UTC. gmtime_r rather than gmtime:
+// the latter returns a pointer into a shared static tm, which the multithreaded F_*
+// strategies raced on -- this is called once per candle per pair.
+bool isTimestampAtFundingTimes(const int64_t timestamp)
 {
-    // Check if the timestamp falls within the desired times
-    tm *target_time = gmtime(&timestamp);
+    const std::tm target_time = utc_tm_from_timestamp(timestamp);
 
-    return (target_time->tm_hour == 0 && target_time->tm_min == 0 && target_time->tm_sec == 0) ||
-           (target_time->tm_hour == 8 && target_time->tm_min == 0 && target_time->tm_sec == 0) ||
-           (target_time->tm_hour == 16 && target_time->tm_min == 0 && target_time->tm_sec == 0);
+    if (target_time.tm_min != 0 || target_time.tm_sec != 0)
+    {
+        return false;
+    }
+
+    return target_time.tm_hour == 0 || target_time.tm_hour == 8 || target_time.tm_hour == 16;
 }
 
 //////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 
-float get_funding_fee_if_any(const fundings &FUND, const int &current_timestamp)
+float get_funding_fee_if_any(const fundings &FUND, const int64_t current_timestamp)
 {
     if (!isTimestampAtFundingTimes(current_timestamp))
     {
@@ -892,15 +905,37 @@ void fill_datafile_paths_f(const std::vector<std::string> &COINS, const std::str
 
 //////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 
+// N values spread evenly across the closed interval [vmin, vmax], endpoints included.
+//
+// The step used to be computed as the integer division (vmax - vmin) / (N - 1), which
+// truncated and so never reached vmax. generateRange_int(3, 600, 300) produced step 1
+// and therefore 3..302 -- half the intended search space, silently. N == 1 also divided
+// by zero. Interpolating in floating point and rounding each point fixes both.
+//
+// Duplicates are removed, so the result may be shorter than N when the interval is
+// narrower than N (e.g. 5 points requested across [1, 3]).
 std::vector<int> generateRange_int(const int &vmin, const int &vmax, const int &N)
 {
+    assert(N >= 1);
+    assert(vmin <= vmax);
+
     std::vector<int> result;
-    const int step = (vmax - vmin) / (N - 1);
+    result.reserve(static_cast<size_t>(N));
+
+    if (N == 1)
+    {
+        result.push_back(vmin);
+        return result;
+    }
 
     for (int i = 0; i < N; i++)
     {
-        const int value = vmin + step * i;
-        result.push_back(value);
+        const double t = static_cast<double>(i) / static_cast<double>(N - 1);
+        const int value = static_cast<int>(std::llround(vmin + t * (static_cast<double>(vmax) - static_cast<double>(vmin))));
+        if (result.empty() || result.back() != value)
+        {
+            result.push_back(value);
+        }
     }
 
     return result;

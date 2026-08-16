@@ -193,7 +193,7 @@ RUN_RESULTf PROCESS(std::vector<KLINEf> &df, const std::vector<fundings> &FUNDIN
     {
         last_closes[ic] = df[ic].close[nb_max - 1];
     }
-    const float WALLET_VAL_USDT = calculate_wallet_val_usdt<NB_PAIRS>(portfolio.usdt_amount, portfolio.coin_amounts, last_closes, portfolio.price_position_open);
+    const double WALLET_VAL_USDT = calculate_wallet_val_usdt<NB_PAIRS>(portfolio.usdt_amount, portfolio.coin_amounts, last_closes, portfolio.price_position_open);
 
     const trade_core::ResultMetrics metrics = trade_core::calculate_result_metrics(WALLET_VAL_USDT, USDT_amount_initial, portfolio.max_drawdown, stats);
 
@@ -321,7 +321,7 @@ int mainProgramLogic()
     const int last_month = get_month_from_timestamp(PAIRS[0].timestamp[last_idx]);
     const int last_day = get_day_from_timestamp(PAIRS[0].timestamp[last_idx]);
 
-    const std::time_t difference = std::abs(int(PAIRS[0].timestamp[last_idx]) - int(PAIRS[0].timestamp[0]));
+    const std::time_t difference = std::abs(PAIRS[0].timestamp[last_idx] - PAIRS[0].timestamp[0]);
     const int days = difference / (24 * 60 * 60);
 
     // Display info

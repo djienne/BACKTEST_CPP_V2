@@ -45,20 +45,25 @@ constexpr const char *GREY = "\033[90m";
 // Strategy-agnostic run result. New strategies should stash their parameters in
 // `param_str` instead of adding numeric fields here. `ema1`/`ema2` remain because the
 // 2-EMA strategy reads them to display a compact legacy banner.
+//
+// Monetary and score fields are double. Price and indicator arrays stay float -- that
+// is where the memory win lives -- but the wallet is an accumulator: thousands of
+// fee subtractions and position round-trips ran through float's ~7 significant digits,
+// and every ranking decision the sweep makes depends on those totals.
 struct RUN_RESULTf
 {
-    float WALLET_VAL_USDT = 0.0f;
-    float gain_pc = 0.0f;
-    float win_rate = 0.0f;
-    float max_DD = 0.0f;
-    float gain_over_DDC = 0.0f;
-    float score = 0.0f;
+    double WALLET_VAL_USDT = 0.0;
+    double gain_pc = 0.0;
+    double win_rate = 0.0;
+    double max_DD = 0.0;
+    double gain_over_DDC = 0.0;
+    double score = 0.0;
     int nb_posi_entered = 0;
     int ema1 = 0;
     int ema2 = 0;
-    float total_fees_paid = 0.0f;
-    float calmar_ratio = 0.0f;
-    float calmar_ratio_monthly = 0.0f;
+    double total_fees_paid = 0.0;
+    double calmar_ratio = 0.0;
+    double calmar_ratio_monthly = 0.0;
     uint max_open_trades = 0;
     std::string param_str;
 };
@@ -123,32 +128,36 @@ struct BBTREND_params
 
 //////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 
-template <int N>
-float vector_product(const std::array<float, N> &vec, const std::array<float, N> &vec2)
+// Position sizes accumulate in double while prices stay float, so the dot product is
+// accumulated in double.
+template <size_t N>
+double vector_product(const std::array<double, N> &vec, const std::array<float, N> &vec2)
 {
-    float out = 0.0;
-    for (uint i = 0; i < vec.size(); i++)
+    double out = 0.0;
+    for (size_t i = 0; i < vec.size(); i++)
     {
-        out += vec[i] * vec2[i];
+        out += vec[i] * static_cast<double>(vec2[i]);
     }
     return out;
 }
 //////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 
 float find_average(const std::vector<float> &vec);
+double find_average(const std::vector<double> &vec);
 float find_min(const std::vector<float> &vec);
 float find_max(const std::vector<float> &vec);
 int find_max(const std::vector<int> &vec);
 
 //////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 
-int get_hour_from_timestamp(const int timestamp);
+// Calendar fields, always interpreted in UTC (see tools.cpp for why).
+int get_hour_from_timestamp(const int64_t timestamp);
 
-int get_year_from_timestamp(const int timestamp);
+int get_year_from_timestamp(const int64_t timestamp);
 
-int get_month_from_timestamp(const int &timestamp);
+int get_month_from_timestamp(const int64_t timestamp);
 
-int get_day_from_timestamp(const int timestamp);
+int get_day_from_timestamp(const int64_t timestamp);
 
 //////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 
@@ -173,8 +182,12 @@ std::string ReplaceAll(std::string str, const std::string &from, const std::stri
 
 //////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 
-float calculate_calmar_ratio(const std::vector<int> &times, const std::vector<float> &wallet_vals, const float &max_DD);
-float calculate_calmar_ratio_monthly(const std::vector<int> &times, const std::vector<float> &wallet_vals, const float &max_DD);
+// `drawdown_normalizer` is the value the averaged periodic return is divided by. Every
+// strategy passes ResultMetrics::ddc (the drawdown-corrected gain, a positive number),
+// not the raw negative max drawdown -- the parameter used to be named `max_DD`, which
+// described neither what callers pass nor what the function does with it.
+double calculate_calmar_ratio(const std::vector<int64_t> &times, const std::vector<double> &wallet_vals, const double drawdown_normalizer);
+double calculate_calmar_ratio_monthly(const std::vector<int64_t> &times, const std::vector<double> &wallet_vals, const double drawdown_normalizer);
 
 //////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 
@@ -281,23 +294,26 @@ private:
 };
 //////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 
-float get_funding_fee_if_any(const fundings &FUND, const int &current_timestamp);
+float get_funding_fee_if_any(const fundings &FUND, const int64_t current_timestamp);
 
 //////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
-template <int N>
-float calculate_wallet_val_usdt(const float &USDT_amount, const std::array<float, N> &COIN_AMOUNTS, const std::array<float, N> &current_prices, const std::array<float, N> &prices_position_open)
+// Mark-to-market value of a futures book. A short is valued as its mirrored long,
+// (2 * entry - price), which is exact at leverage 1 and has no liquidation model --
+// see the note on the short helpers in trade_core.hh.
+template <size_t N>
+double calculate_wallet_val_usdt(const double USDT_amount, const std::array<double, N> &COIN_AMOUNTS, const std::array<float, N> &current_prices, const std::array<double, N> &prices_position_open)
 {
-    float VAL = USDT_amount;
+    double VAL = USDT_amount;
 
-    for (int ic = 0; ic < COIN_AMOUNTS.size(); ic++)
+    for (size_t ic = 0; ic < COIN_AMOUNTS.size(); ic++)
     {
-        if (COIN_AMOUNTS[ic] > 0.0f)
+        if (COIN_AMOUNTS[ic] > 0.0)
         {
-            VAL += COIN_AMOUNTS[ic] * current_prices[ic];
+            VAL += COIN_AMOUNTS[ic] * static_cast<double>(current_prices[ic]);
         }
-        else if (COIN_AMOUNTS[ic] < 0.0f)
+        else if (COIN_AMOUNTS[ic] < 0.0)
         {
-            VAL += std::abs(COIN_AMOUNTS[ic]) * (2.0f * prices_position_open[ic] - current_prices[ic]);
+            VAL += std::abs(COIN_AMOUNTS[ic]) * (2.0 * prices_position_open[ic] - static_cast<double>(current_prices[ic]));
         }
     }
 

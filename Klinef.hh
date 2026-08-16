@@ -1,4 +1,5 @@
 #pragma once
+#include <cstdint>
 #include <vector>
 #include <array>
 #include <string>
@@ -7,7 +8,9 @@ using uint = unsigned int;
 //////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 struct KLINEf
 {
-    std::vector<long int> timestamp;
+    // Seconds since the Unix epoch, always UTC. int64_t rather than int: the calendar
+    // helpers used to narrow to int, which overflows in January 2038.
+    std::vector<int64_t> timestamp;
     std::vector<float> open;
     std::vector<float> high;
     std::vector<float> low;
@@ -31,10 +34,10 @@ struct KLINEf
 
 struct fundings
 {
-    std::vector<long int> timestamp;
+    std::vector<int64_t> timestamp;
     std::vector<float> funding;
     // Mirrors `timestamp` for fast exact funding lookups during futures backtests.
-    std::unordered_map<long int, float> funding_by_timestamp;
+    std::unordered_map<int64_t, float> funding_by_timestamp;
     uint nb;
     std::string name;
 };

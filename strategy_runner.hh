@@ -73,7 +73,7 @@ inline void print_date_range(const KLINEf &reference)
     const int y1 = get_year_from_timestamp(reference.timestamp[last_idx]);
     const int m1 = get_month_from_timestamp(reference.timestamp[last_idx]);
     const int d1 = get_day_from_timestamp(reference.timestamp[last_idx]);
-    const std::time_t difference = std::abs(int(reference.timestamp[last_idx]) - int(reference.timestamp[0]));
+    const std::time_t difference = std::abs(reference.timestamp[last_idx] - reference.timestamp[0]);
     const int days = difference / (24 * 60 * 60);
     std::cout << "Begin day      : " << y0 << "/" << m0 << "/" << d0 << std::endl;
     std::cout << "End day        : " << y1 << "/" << m1 << "/" << d1 << std::endl;

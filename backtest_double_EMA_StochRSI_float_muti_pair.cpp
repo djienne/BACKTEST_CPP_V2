@@ -115,7 +115,7 @@ RUN_RESULTf PROCESS(const vector<KLINEf> &PAIRS, const int ema_s, const int ema_
     for (uint ic = 0; ic < NB_PAIRS; ic++)
         last_closes[ic] = PAIRS[ic].close[nb_max - 1];
 
-    const float WALLET_VAL_USDT = trade_core::calculate_spot_wallet_val_usdt(portfolio, last_closes);
+    const double WALLET_VAL_USDT = trade_core::calculate_spot_wallet_val_usdt(portfolio, last_closes);
 
     const trade_core::ResultMetrics metrics = trade_core::calculate_result_metrics(WALLET_VAL_USDT, USDT_amount_initial, portfolio.max_drawdown, stats);
 

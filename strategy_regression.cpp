@@ -97,7 +97,7 @@ trade_core::ResultMetrics run_multi_pair_case()
         last_closes[ic] = pairs[ic].close[nb_max - 1];
     }
 
-    const float wallet_val_usdt = trade_core::calculate_spot_wallet_val_usdt(portfolio, last_closes);
+    const double wallet_val_usdt = trade_core::calculate_spot_wallet_val_usdt(portfolio, last_closes);
     const trade_core::ResultMetrics metrics = trade_core::calculate_result_metrics(wallet_val_usdt, USDT_amount_initial, portfolio.max_drawdown, stats);
 
     std::cout << std::fixed << std::setprecision(6);
