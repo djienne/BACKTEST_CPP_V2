@@ -1,0 +1,42 @@
+name: CI
+
+on:
+  push:
+    branches: ["**"]
+  pull_request:
+
+jobs:
+  build-and-test:
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install build dependencies
+        run: sudo apt-get update && sudo apt-get install -y build-essential unzip nlohmann-json3-dev
+
+      # TA-Lib ships as a zip in-tree. Its own src/tools/gen_code target races under
+      # `make -j`, so the library must be built serially.
+      - name: Build TA-Lib
+        run: |
+          unzip -q -o talib.zip
+          cd talib
+          ./configure --prefix="$(pwd)/talib_install/" > /dev/null
+          make > /dev/null
+          make install > /dev/null
+
+      - name: Regression gate (build + unit tests + numeric fixtures)
+        run: ./run_regression.sh
+
+      # Sanitizers run against the unit suite only: it is fast and has no data-file
+      # dependency, which is what makes it a usable gate on every push.
+      - name: AddressSanitizer + UBSan
+        run: |
+          make BUILD=asan tests
+          ASAN_OPTIONS=detect_leaks=0 UBSAN_OPTIONS=halt_on_error=1 ./tests.exe
+
+      - name: ThreadSanitizer
+        run: |
+          make clean
+          make BUILD=tsan tests
+          TSAN_OPTIONS=halt_on_error=1 ./tests.exe

@@ -4,5 +4,7 @@ baseline_*.txt
 after_*.txt
 regen_*.txt
 .regression_tmp/
+.baseline/
+build/
 talib/
 python/__pycache__/
