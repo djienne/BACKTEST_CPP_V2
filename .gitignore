@@ -8,3 +8,10 @@ regen_*.txt
 build/
 talib/
 python/__pycache__/
+
+# Secrets — the real .env must never be committed.
+.env
+.env.*
+
+# ...but the placeholder template must stay tracked.
+!.env.example
