@@ -52,32 +52,15 @@ vector<int> range_AO_slow = integer_range(2, 105, 5);
 vector<int> range_EMA_fast = integer_range(2, 105, 5);
 vector<int> range_EMA_slow = integer_range(50, 310, 10);
 //////////////////////////
-array<vector<float>, NB_PAIRS> AO{};
-array<std::unordered_map<string, vector<float>>, NB_PAIRS> EMA_LISTS{};
-array<vector<float>, NB_PAIRS> StochRSI{};
-array<vector<float>, NB_PAIRS> WILLR{};
-
-array<long int, NB_PAIRS> last_times{};
+// Indicator series live in each pair's IndicatorCache (see Klinef.hh), not in
+// strategy-level globals.
 uint nb_tested = 0;
 
 //////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 
-void fill_datafile_paths()
-{
-    for (uint i = 0; i < COINS.size(); i++)
-    {
-        DATAFILES.push_back("./data/data/binance/" + timeframe + "/" + COINS[i] + "-USDT.csv");
-    }
-}
-
-//////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
-
-RUN_RESULTf PROCESS(const vector<KLINEf> &PAIRS, const int fast, const int slow, int ema_fast, int ema_slow, const uint MAX_OPEN_TRADES)
+RUN_RESULTf PROCESS(vector<KLINEf> &PAIRS, const int fast, const int slow, int ema_fast, int ema_slow, const uint MAX_OPEN_TRADES)
 {
     nb_tested++;
-
-    const std::string emaf_str = "EMA_" + std::to_string(ema_fast);
-    const std::string emas_str = "EMA_" + std::to_string(ema_slow);
 
     RUN_RESULTf result{};
 
@@ -91,9 +74,48 @@ RUN_RESULTf PROCESS(const vector<KLINEf> &PAIRS, const int fast, const int slow,
     bool OPEN_LONG_CONDI = false;
     bool CLOSE_LONG_CONDI = false;
 
+    // AO depends only on (fast, slow) -- roughly 1,050 distinct pairs -- but the sweep
+    // also varies ema_fast, ema_slow and max_open_trades, so recomputing it here ran the
+    // same full-series work millions of times over.
+    //
+    // main() orders the parameter list so all entries sharing a (fast, slow) pair run
+    // consecutively, which means holding just the current pair's series is enough: AO is
+    // computed ~1,050 times instead of ~5,000,000. Caching every combination instead
+    // would work too, but at ~2.2 MB per pair it would grow past 2 GB.
+    static std::string cached_ao_key;
+    const std::string ao_key = IndicatorCache::key("AO", fast, slow);
+    if (ao_key != cached_ao_key)
+    {
+        for (uint ic = 0; ic < NB_PAIRS; ic++)
+        {
+            PAIRS[ic].indicators.erase(cached_ao_key);
+            PAIRS[ic].indicators.put(ao_key, TALIB_AO(PAIRS[ic].high, PAIRS[ic].low, fast, slow));
+        }
+        cached_ao_key = ao_key;
+    }
+
+    std::array<const std::vector<float> *, NB_PAIRS> AO{};
     for (uint ic = 0; ic < NB_PAIRS; ic++)
     {
-        AO[ic] = TALIB_AO(PAIRS[ic].high, PAIRS[ic].low, fast, slow);
+        AO[ic] = &PAIRS[ic].indicators.get(ao_key);
+    }
+
+    // Hoist the per-pair series out of the bar loop. These used to be looked up through
+    // a string-keyed map on every bar for every pair.
+    std::array<const std::vector<float> *, NB_PAIRS> EMA_F{};
+    std::array<const std::vector<float> *, NB_PAIRS> EMA_S{};
+    std::array<const std::vector<float> *, NB_PAIRS> SRSI{};
+    std::array<const std::vector<float> *, NB_PAIRS> WILL{};
+    const std::string emaf_key = IndicatorCache::key("EMA", ema_fast);
+    const std::string emas_key = IndicatorCache::key("EMA", ema_slow);
+    const std::string srsi_key = IndicatorCache::key("STOCHRSI", 14, 14);
+    const std::string willr_key = IndicatorCache::key("WILLR", 14);
+    for (uint ic = 0; ic < NB_PAIRS; ic++)
+    {
+        EMA_F[ic] = &PAIRS[ic].indicators.get(emaf_key);
+        EMA_S[ic] = &PAIRS[ic].indicators.get(emas_key);
+        SRSI[ic] = &PAIRS[ic].indicators.get(srsi_key);
+        WILL[ic] = &PAIRS[ic].indicators.get(willr_key);
     }
 
     const uint ii_begin = start_indexes[0];
@@ -115,12 +137,16 @@ RUN_RESULTf PROCESS(const vector<KLINEf> &PAIRS, const int fast, const int slow,
             bool TP_condition = false;
             if (portfolio.coin_amounts[ic] > 0)
             {
-                const float pc_gain = (PAIRS[ic].high[ii] - portfolio.price_position_open[ic]) / portfolio.price_position_open[ic] * 100.0f;
+                const double pc_gain = (PAIRS[ic].high[ii] - portfolio.price_position_open[ic]) / portfolio.price_position_open[ic] * 100.0;
                 TP_condition = pc_gain > HARD_TP_PC;
             }
 
-            OPEN_LONG_CONDI = EMA_LISTS[ic][emaf_str][ii] >= EMA_LISTS[ic][emas_str][ii] && WILLR[ic][ii] < WillOverSold && AO[ic][ii] > 0.0f && AO[ic][ii - 1] > AO[ic][ii];
-            CLOSE_LONG_CONDI = (AO[ic][ii] < 0.0f && StochRSI[ic][ii] > stochOverSold) || WILLR[ic][ii] > WillOverBought || TP_condition;
+            const std::vector<float> &ao = *AO[ic];
+            const std::vector<float> &willr = *WILL[ic];
+            const std::vector<float> &srsi = *SRSI[ic];
+
+            OPEN_LONG_CONDI = (*EMA_F[ic])[ii] >= (*EMA_S[ic])[ii] && willr[ii] < WillOverSold && ao[ii] > 0.0f && ao[ii - 1] > ao[ii];
+            CLOSE_LONG_CONDI = (ao[ii] < 0.0f && srsi[ii] > stochOverSold) || willr[ii] > WillOverBought || TP_condition;
 
             // IT IS IMPORTANT TO CHECK FIRST FOR CLOSING POSITION AND ONLY THEN FOR OPENING POSITION
 
@@ -181,13 +207,15 @@ void CALCULATE_INDICATORS(std::vector<KLINEf> &PAIRS)
 
     for (uint ic = 0; ic < NB_PAIRS; ic++)
     {
-        StochRSI[ic] = TALIB_STOCHRSI_not_averaged(PAIRS[ic].close, 14, 14);
+        PAIRS[ic].indicators.put(IndicatorCache::key("STOCHRSI", 14, 14),
+                                 TALIB_STOCHRSI_not_averaged(PAIRS[ic].close, 14, 14));
     }
     cout << "Calculated STOCHRSI." << std::endl;
 
     for (uint ic = 0; ic < NB_PAIRS; ic++)
     {
-        WILLR[ic] = TALIB_WILLR(PAIRS[ic].high, PAIRS[ic].low, PAIRS[ic].close, 14);
+        PAIRS[ic].indicators.put(IndicatorCache::key("WILLR", 14),
+                                 TALIB_WILLR(PAIRS[ic].high, PAIRS[ic].low, PAIRS[ic].close, 14));
     }
     cout << "Calculated WILLR." << std::endl;
 
@@ -196,7 +224,7 @@ void CALCULATE_INDICATORS(std::vector<KLINEf> &PAIRS)
     {
         for (const int ema_per : ema_values)
         {
-            EMA_LISTS[ic]["EMA_" + std::to_string(ema_per)] = TALIB_EMA(PAIRS[ic].close, ema_per);
+            PAIRS[ic].indicators.put(IndicatorCache::key("EMA", ema_per), TALIB_EMA(PAIRS[ic].close, ema_per));
         }
     }
     cout << "Calculated EMAs." << std::endl;
@@ -209,7 +237,8 @@ int main()
     const double t_begin = get_wall_time();
     strategy_runner::init_talib();
 
-    fill_datafile_paths();
+    // Shared path helper rather than a per-strategy copy of the same loop.
+    DATAFILES = strategy_runner::build_spot_datafile_paths(COINS, timeframe);
 
     vector<KLINEf> PAIRS;
     PAIRS.reserve(NB_PAIRS);
@@ -229,24 +258,50 @@ int main()
     std::cout << "WillR Over Bought     : " << WillOverBought << std::endl;
     std::cout << "WillR Over Sold       : " << WillOverSold << std::endl;
 
-    std::vector<BigWill_params> param_list{};
-    param_list.reserve(range_AO_slow.size() * range_AO_fast.size() * MAX_OPEN_TRADES_TO_TEST.size());
-    for (const uint max_op_tr : MAX_OPEN_TRADES_TO_TEST)
+    // The parameter list is built grouped by (AO_fast, AO_slow), because AO is the one
+    // expensive indicator here and depends only on that pair. Keeping a group contiguous
+    // lets PROCESS hold a single AO series at a time -- ~1,050 computations instead of
+    // ~5,000,000, without the ~2.2 GB a cache-everything approach would need.
+    //
+    // The group order is shuffled (and each group internally too), so an interrupted run
+    // has still sampled the whole space -- the property the sweep's own shuffle provides.
+    // cfg.shuffle is therefore turned off, since reshuffling would break the grouping.
+    std::vector<std::pair<int, int>> ao_groups{};
+    ao_groups.reserve(range_AO_fast.size() * range_AO_slow.size());
+    for (const int fast : range_AO_fast)
     {
-        for (const int fast : range_AO_fast)
+        for (const int slow : range_AO_slow)
         {
-            for (const int slow : range_AO_slow)
+            if (std::abs(fast - slow) < 7) continue;
+            ao_groups.emplace_back(fast, slow);
+        }
+    }
+    random_shuffle_vector(ao_groups);
+
+    std::vector<BigWill_params> inner{};
+    inner.reserve(range_EMA_fast.size() * range_EMA_slow.size() * MAX_OPEN_TRADES_TO_TEST.size());
+
+    std::vector<BigWill_params> param_list{};
+    // Reserve the whole product. This used to omit both EMA ranges, under-reserving by
+    // a factor of ~550 and forcing repeated reallocation of a list that grows past five
+    // million entries.
+    param_list.reserve(ao_groups.size() * range_EMA_fast.size() * range_EMA_slow.size() *
+                       MAX_OPEN_TRADES_TO_TEST.size());
+    for (const auto &g : ao_groups)
+    {
+        inner.clear();
+        for (const uint max_op_tr : MAX_OPEN_TRADES_TO_TEST)
+        {
+            for (const int ema_f : range_EMA_fast)
             {
-                for (const int ema_f : range_EMA_fast)
+                for (const int ema_s : range_EMA_slow)
                 {
-                    for (const int ema_s : range_EMA_slow)
-                    {
-                        if (std::abs(fast - slow) < 7) continue;
-                        param_list.push_back({fast, slow, ema_f, ema_s, max_op_tr});
-                    }
+                    inner.push_back({g.first, g.second, ema_f, ema_s, max_op_tr});
                 }
             }
         }
+        random_shuffle_vector(inner, false); // quiet: this runs once per group
+        param_list.insert(param_list.end(), inner.begin(), inner.end());
     }
 
     strategy_runner::SweepConfig cfg;
@@ -256,8 +311,9 @@ int main()
     cfg.min_dd = MIN_ALLOWED_MAX_DRAWBACK;
     cfg.min_reasonable_gain = 50.0f;
     cfg.print_every = 1000;
+    cfg.shuffle = false; // ordering above is deliberate; see the comment on the grouping
 
-    strategy_runner::sweep(cfg, param_list, [&](const BigWill_params &p) {
+    strategy_runner::sweep(cfg, std::move(param_list), [&](const BigWill_params &p) {
         return PROCESS(PAIRS, p.AO_fast, p.AO_slow, p.ema_f, p.ema_s, p.max_open_trades);
     });
 

@@ -33,6 +33,15 @@ struct SweepConfig
     float min_reasonable_gain = 0.0f; // reject tiny or negative gains
     float max_reasonable_gain = 1.0e6f;
     uint print_every = 1000;
+
+    // Shuffle the parameter list before sweeping, so an interrupted run has still
+    // sampled the whole space rather than a prefix of it.
+    //
+    // Set false when the caller has already ordered the list deliberately -- typically
+    // to group parameters that share an expensive indicator, so a strategy can cache
+    // that indicator for one group at a time instead of accumulating every
+    // combination. BigWill does exactly this for its Awesome Oscillator.
+    bool shuffle = true;
 };
 
 inline void init_talib()
@@ -134,6 +143,16 @@ inline void print_timing_and_ram(double t_begin, uint nb_tested)
 
 // Runs a parameter sweep. `process_fn` is called once per parameter; `print_fn`
 // customizes result-printing (default matches the canonical multi-pair format).
+//
+// `params` is taken by value because it is shuffled in place, so callers should
+// std::move() their list in -- BigWill's is around 5.7 million entries and copying it
+// cost over 100 MB of pointless allocation and memcpy per run.
+//
+// Single-threaded by design, for now. process_fn typically populates each pair's
+// IndicatorCache lazily on first sight of a parameter combination (see BigWill), so
+// parallelising this loop needs that cache made thread-safe first. The lazy caching is
+// worth far more than the core count: it removes a redundancy factor in the thousands,
+// where threading would give at most the number of cores.
 template <typename ParamsT, typename ProcessFn,
           typename PrintFn = std::function<void(const RUN_RESULTf &)>>
 RUN_RESULTf sweep(const SweepConfig &cfg, std::vector<ParamsT> params, ProcessFn process_fn,
@@ -150,7 +169,10 @@ RUN_RESULTf sweep(const SweepConfig &cfg, std::vector<ParamsT> params, ProcessFn
         }
     };
 
-    random_shuffle_vector(params);
+    if (cfg.shuffle)
+    {
+        random_shuffle_vector(params);
+    }
 
     RUN_RESULTf best{};
     best.score = -std::numeric_limits<float>::infinity();

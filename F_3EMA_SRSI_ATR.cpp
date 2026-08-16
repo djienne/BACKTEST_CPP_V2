@@ -9,7 +9,8 @@
 #include <unordered_map>
 #include "tools.hh"
 #include "trade_core.hh"
-#include "custom_talib_wrapper.hh"
+#include "indicators.hh"
+#include "strategy_runner.hh"
 #include <ta-lib/ta_libc.h>
 #include <iomanip>
 #include <thread>
@@ -91,11 +92,58 @@ void print_best_res(const RUN_RESULTf &bestt)
 RUN_RESULTf PROCESS(std::vector<KLINEf> &df, const std::vector<fundings> &FUNDINGS, const std::vector<uint> &start_indexes, const int &ema1, const int &ema2, const int &ema3, const float &up, const float &down, const float &STOCH_RSI_LOWER, const float &STOCH_RSI_UPPER, const uint &MAX_OPEN_TRADES)
 {
 
+    // The three EMAs depend only on (ema1, ema2, ema3). This strategy samples the
+    // parameter space at random, so only the current triple is held: on 5m data a
+    // single EMA series is ~2.8 MB per pair, and caching all ~400 sampled periods across
+    // 11 pairs would run to double-digit gigabytes.
+    //
+    // thread_local, not static: mainProgramLogic runs on several worker threads, each
+    // with its own copy of df.
+    thread_local std::array<std::string, 3> cached_ema_keys;
+    const std::array<std::string, 3> ema_keys = {IndicatorCache::key("EMA", ema1),
+                                                 IndicatorCache::key("EMA", ema2),
+                                                 IndicatorCache::key("EMA", ema3)};
+    if (ema_keys != cached_ema_keys)
+    {
+        const std::array<int, 3> periods = {ema1, ema2, ema3};
+        for (uint ic = 0; ic < NB_PAIRS; ic++)
+        {
+            for (const std::string &old_key : cached_ema_keys)
+            {
+                // Never evict a key the new triple still needs.
+                if (!old_key.empty() && old_key != ema_keys[0] && old_key != ema_keys[1] && old_key != ema_keys[2])
+                {
+                    df[ic].indicators.erase(old_key);
+                }
+            }
+            for (size_t k = 0; k < periods.size(); ++k)
+            {
+                if (!df[ic].indicators.has(ema_keys[k]))
+                {
+                    df[ic].indicators.put(ema_keys[k], TALIB_EMA(df[ic].close, periods[k]));
+                }
+            }
+        }
+        cached_ema_keys = ema_keys;
+    }
+
+    std::array<const std::vector<float> *, NB_PAIRS> EMA1{};
+    std::array<const std::vector<float> *, NB_PAIRS> EMA2{};
+    std::array<const std::vector<float> *, NB_PAIRS> EMA3{};
+    std::array<const std::vector<float> *, NB_PAIRS> SRSI_K{};
+    std::array<const std::vector<float> *, NB_PAIRS> SRSI_D{};
+    std::array<const std::vector<float> *, NB_PAIRS> ATR{};
+    const std::string k_key = IndicatorCache::key("STOCHRSI_K", 14, 14, 3, 3);
+    const std::string d_key = IndicatorCache::key("STOCHRSI_D", 14, 14, 3, 3);
+    const std::string atr_key = IndicatorCache::key("ATR", 14);
     for (uint ic = 0; ic < NB_PAIRS; ic++)
     {
-        df[ic].EMA[ema1] = TALIB_EMA(df[ic].close, ema1);
-        df[ic].EMA[ema2] = TALIB_EMA(df[ic].close, ema2);
-        df[ic].EMA[ema3] = TALIB_EMA(df[ic].close, ema3);
+        EMA1[ic] = &df[ic].indicators.get(ema_keys[0]);
+        EMA2[ic] = &df[ic].indicators.get(ema_keys[1]);
+        EMA3[ic] = &df[ic].indicators.get(ema_keys[2]);
+        SRSI_K[ic] = &df[ic].indicators.get(k_key);
+        SRSI_D[ic] = &df[ic].indicators.get(d_key);
+        ATR[ic] = &df[ic].indicators.get(atr_key);
     }
 
     nb_tested++;
@@ -153,9 +201,15 @@ RUN_RESULTf PROCESS(std::vector<KLINEf> &df, const std::vector<fundings> &FUNDIN
 
             // conditions for open / close position
 
-            const bool OPEN_LONG_CONDI = df[ic].EMA[ema1][ii] > df[ic].EMA[ema2][ii] && df[ic].EMA[ema2][ii] > df[ic].EMA[ema3][ii] && df[ic].close[ii] > df[ic].EMA[ema1][ii] && df[ic].StochRSI_K[ii] <= STOCH_RSI_LOWER && df[ic].StochRSI_D[ii] <= STOCH_RSI_LOWER && df[ic].StochRSI_K[ii - 1] >= df[ic].StochRSI_D[ii - 1] && df[ic].StochRSI_K[ii] <= df[ic].StochRSI_D[ii];
+            const std::vector<float> &e1 = *EMA1[ic];
+            const std::vector<float> &e2 = *EMA2[ic];
+            const std::vector<float> &e3 = *EMA3[ic];
+            const std::vector<float> &sk = *SRSI_K[ic];
+            const std::vector<float> &sd = *SRSI_D[ic];
 
-            const bool OPEN_SHORT_CONDI = df[ic].EMA[ema1][ii] < df[ic].EMA[ema2][ii] && df[ic].EMA[ema2][ii] < df[ic].EMA[ema3][ii] && df[ic].close[ii] < df[ic].EMA[ema1][ii] && df[ic].StochRSI_K[ii] >= STOCH_RSI_UPPER && df[ic].StochRSI_D[ii] >= STOCH_RSI_UPPER && df[ic].StochRSI_K[ii - 1] <= df[ic].StochRSI_D[ii - 1] && df[ic].StochRSI_K[ii] >= df[ic].StochRSI_D[ii];
+            const bool OPEN_LONG_CONDI = e1[ii] > e2[ii] && e2[ii] > e3[ii] && df[ic].close[ii] > e1[ii] && sk[ii] <= STOCH_RSI_LOWER && sd[ii] <= STOCH_RSI_LOWER && sk[ii - 1] >= sd[ii - 1] && sk[ii] <= sd[ii];
+
+            const bool OPEN_SHORT_CONDI = e1[ii] < e2[ii] && e2[ii] < e3[ii] && df[ic].close[ii] < e1[ii] && sk[ii] >= STOCH_RSI_UPPER && sd[ii] >= STOCH_RSI_UPPER && sk[ii - 1] <= sd[ii - 1] && sk[ii] >= sd[ii];
 
             bool timeout = false;
             if (portfolio.coin_amounts[ic] != 0.0f)
@@ -194,7 +248,7 @@ RUN_RESULTf PROCESS(std::vector<KLINEf> &df, const std::vector<fundings> &FUNDIN
             {
                 trade_core::open_futures_long(portfolio, stats, ic, df[ic].close[ii], FEE, MAX_OPEN_TRADES);
 
-                ATR_AT_OPEN[ic] = df[ic].ATR[ii];
+                ATR_AT_OPEN[ic] = (*ATR[ic])[ii];
                 OPEN_TS[ic] = df[ic].timestamp[ii];
             }
 
@@ -203,7 +257,7 @@ RUN_RESULTf PROCESS(std::vector<KLINEf> &df, const std::vector<fundings> &FUNDIN
             {
                 trade_core::open_futures_short(portfolio, stats, ic, df[ic].close[ii], FEE, MAX_OPEN_TRADES);
 
-                ATR_AT_OPEN[ic] = df[ic].ATR[ii];
+                ATR_AT_OPEN[ic] = (*ATR[ic])[ii];
                 OPEN_TS[ic] = df[ic].timestamp[ii];
             }
         }
@@ -239,16 +293,9 @@ RUN_RESULTf PROCESS(std::vector<KLINEf> &df, const std::vector<fundings> &FUNDIN
     result.param_str = "\n  EMA1: " + std::to_string(ema1) + " ; EMA2: " + std::to_string(ema2) + " ; EMA3: " + std::to_string(ema3) +
                        "\n  up: " + std::to_string(up) + " ; down: " + std::to_string(down) + " ; STOCH_RSI_LOWER: " + std::to_string(STOCH_RSI_LOWER) + " ; STOCH_RSI_UPPER: " + std::to_string(STOCH_RSI_UPPER);
 
-    for (uint ic = 0; ic < NB_PAIRS; ic++)
-    {
-        // free the memory
-        df[ic].EMA[ema1].clear();
-        df[ic].EMA[ema2].clear();
-        df[ic].EMA[ema3].clear();
-        std::vector<float>(df[ic].EMA[ema1]).swap(df[ic].EMA[ema1]);
-        std::vector<float>(df[ic].EMA[ema2]).swap(df[ic].EMA[ema2]);
-        std::vector<float>(df[ic].EMA[ema3]).swap(df[ic].EMA[ema3]);
-    }
+    // The EMAs stay in the cache rather than being freed here: they are keyed by period
+    // and this sweep revisits the same periods across many parameter combinations, so
+    // holding them is what turns a recompute-per-run into a compute-once.
 
     return result;
 }
@@ -264,9 +311,12 @@ void CALCULATE_SOME_INDICATORS(std::vector<KLINEf> &PAIRS)
     {
         std::cout << "Calculating some indicators for " << COINS[ic] << std::endl;
 
-        PAIRS[ic].ATR = TALIB_ATR(PAIRS[ic].high, PAIRS[ic].low, PAIRS[ic].close, 14);
-        PAIRS[ic].StochRSI_K = TALIB_STOCHRSI_K(PAIRS[ic].close, 14, 14, 3, 3);
-        PAIRS[ic].StochRSI_D = TALIB_STOCHRSI_D(PAIRS[ic].close, 14, 14, 3, 3);
+        PAIRS[ic].indicators.put(IndicatorCache::key("ATR", 14),
+                                 TALIB_ATR(PAIRS[ic].high, PAIRS[ic].low, PAIRS[ic].close, 14));
+        PAIRS[ic].indicators.put(IndicatorCache::key("STOCHRSI_K", 14, 14, 3, 3),
+                                 TALIB_STOCHRSI_K(PAIRS[ic].close, 14, 14, 3, 3));
+        PAIRS[ic].indicators.put(IndicatorCache::key("STOCHRSI_D", 14, 14, 3, 3),
+                                 TALIB_STOCHRSI_D(PAIRS[ic].close, 14, 14, 3, 3));
 
         std::cout << "Done." << std::endl;
     }
@@ -302,17 +352,9 @@ void mainProgramLogic()
         std::cout << YELLOW << "  " << dataf << RESET << endl;
     }
 
-    TA_RetCode retCode;
-    retCode = TA_Initialize();
-    if (retCode != TA_SUCCESS)
-    {
-        std::cout << "Cannot initialize TA-Lib !\n"
-                  << retCode << "\n";
-    }
-    else
-    {
-        std::cout << "Initialized TA-Lib !\n";
-    }
+    // TA-Lib is initialized once in main(), not here: this function runs on every
+    // worker thread, and one thread's TA_Shutdown() used to land while another was
+    // still computing.
 
     std::vector<KLINEf> PAIRS{};
     PAIRS.reserve(NB_PAIRS);
@@ -429,26 +471,31 @@ void mainProgramLogic()
     std::cout << "RAM usage                     : " << std::round(ram_usage * 10.0) / 10.0 << " MB" << endl;
     std::cout << "-------------------------------------------------------------------------" << endl;
 
-    TA_Shutdown();
 }
 
 int main()
 {
-    const int N = 2;  // Number of threads
+    const int N = 2; // Number of threads
 
-    // Create a vector to hold the threads
+    // TA-Lib is a process-wide library: initialize and shut it down exactly once,
+    // around the workers rather than inside each of them.
+    strategy_runner::init_talib();
+
     std::vector<std::thread> threads;
+    threads.reserve(N);
 
-    // Launch N threads, each running the mainProgramLogic function
-    for (int i = 0; i < N; ++i) {
-        threads.push_back(std::thread(mainProgramLogic));
-        std::this_thread::sleep_for(std::chrono::milliseconds(50)); 
+    // Each worker samples the parameter space independently, so they only need distinct
+    // RNG seeds -- which RandomNumberGenerator now provides by mixing in the thread id.
+    for (int i = 0; i < N; ++i)
+    {
+        threads.emplace_back(mainProgramLogic);
     }
 
-    // Wait for all threads to finish
-    for (auto& thread : threads) {
+    for (auto &thread : threads)
+    {
         thread.join();
     }
 
+    TA_Shutdown();
     return 0;
 }

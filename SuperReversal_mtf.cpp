@@ -225,7 +225,7 @@ int main()
     cfg.print_every = 100;
 
     uint nb_tested = 0;
-    strategy_runner::sweep(cfg, param_list, [&](const SR_params &p) {
+    strategy_runner::sweep(cfg, std::move(param_list), [&](const SR_params &p) {
         nb_tested++;
         return PROCESS(PAIRS, p.ema_fast, p.ema_slow, p.max_open_trades);
     });

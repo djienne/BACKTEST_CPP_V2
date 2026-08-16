@@ -4,6 +4,9 @@
 #include <array>
 #include <string>
 #include <unordered_map>
+
+#include "indicator_cache.hh"
+
 using uint = unsigned int;
 //////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 struct KLINEf
@@ -19,21 +22,16 @@ struct KLINEf
     // which made the whole volume indicator family (OBV, MFI, A/D, VWAP, relative
     // volume) unreachable.
     std::vector<float> volume;
-    std::array<std::vector<float>, 1000> EMA;
-    std::array<std::vector<float>, 1000> EMA_1h;
     uint nb;
     std::string name;
     uint start_idx;
-    std::vector<float> ATR;
-    std::vector<float> StochRSI_K;
-    std::vector<float> StochRSI_D;
-    std::vector<float> StochRSI;
-    std::vector<float> AO;
-    std::vector<float> WILLR;
-    std::vector<float> BollB_U;
-    std::vector<float> BollB_M;
-    std::vector<float> BollB_L;
-    std::vector<float> SuperTrend_1h;
+
+    // Precomputed indicator series for this pair, keyed by name + parameters. This
+    // replaced two fixed 1000-slot arrays indexed directly by EMA period (any period
+    // >= 1000 was silent out-of-bounds) and a list of named members that every strategy
+    // carried whether it used them or not. Adding an indicator to one strategy no
+    // longer requires editing this struct.
+    IndicatorCache indicators;
 };
 
 struct fundings

@@ -9,7 +9,8 @@
 #include <unordered_map>
 #include "tools.hh"
 #include "trade_core.hh"
-#include "custom_talib_wrapper.hh"
+#include "indicators.hh"
+#include "strategy_runner.hh"
 #include <ta-lib/ta_libc.h>
 using namespace std;
 using uint = unsigned int;
@@ -86,9 +87,47 @@ RUN_RESULTf PROCESS(std::vector<KLINEf> &df, const std::vector<fundings> &FUNDIN
     bool OPEN_SHORT_CONDI = false;
     bool CLOSE_SHORT_CONDI = false;
 
+    // AO depends only on (AO_fast, AO_slow). Unlike BigWill, this strategy samples the
+    // parameter space at random rather than walking an ordered list, so consecutive runs
+    // rarely share a pair and only the current series is held. That keeps memory flat --
+    // caching every combination would reach ~2.2 GB -- at the cost of the hit rate an
+    // ordered sweep gets. Grouping the sampler would recover it; see BigWill.
+    //
+    // thread_local, not static: mainProgramLogic runs on several worker threads.
+    thread_local std::string cached_ao_key;
+    const std::string ao_key = IndicatorCache::key("AO", AO_fast, AO_slow);
+    if (ao_key != cached_ao_key)
+    {
+        for (uint ic = 0; ic < NB_PAIRS; ic++)
+        {
+            df[ic].indicators.erase(cached_ao_key);
+            df[ic].indicators.put(ao_key, TALIB_AO(df[ic].high, df[ic].low, AO_fast, AO_slow));
+        }
+        cached_ao_key = ao_key;
+    }
+
+    std::array<const std::vector<float> *, NB_PAIRS> AO{};
     for (uint ic = 0; ic < NB_PAIRS; ic++)
     {
-        df[ic].AO = TALIB_AO(df[ic].high, df[ic].low, AO_fast, AO_slow);
+        AO[ic] = &df[ic].indicators.get(ao_key);
+    }
+
+    // Hoist every per-pair series out of the bar loop: these used to be re-indexed
+    // through a 1000-slot array (EMA) or a struct member on every bar.
+    std::array<const std::vector<float> *, NB_PAIRS> EMA_F{};
+    std::array<const std::vector<float> *, NB_PAIRS> EMA_S{};
+    std::array<const std::vector<float> *, NB_PAIRS> SRSI{};
+    std::array<const std::vector<float> *, NB_PAIRS> WILL{};
+    const std::string emaf_key = IndicatorCache::key("EMA", ema_fast);
+    const std::string emas_key = IndicatorCache::key("EMA", ema_slow);
+    const std::string srsi_key = IndicatorCache::key("STOCHRSI", 14, 14);
+    const std::string willr_key = IndicatorCache::key("WILLR", 14);
+    for (uint ic = 0; ic < NB_PAIRS; ic++)
+    {
+        EMA_F[ic] = &df[ic].indicators.get(emaf_key);
+        EMA_S[ic] = &df[ic].indicators.get(emas_key);
+        SRSI[ic] = &df[ic].indicators.get(srsi_key);
+        WILL[ic] = &df[ic].indicators.get(willr_key);
     }
 
     const uint ii_begin = start_indexes[0] + 2;
@@ -129,22 +168,28 @@ RUN_RESULTf PROCESS(std::vector<KLINEf> &df, const std::vector<fundings> &FUNDIN
 
             bool c1, c2, c3, c4;
 
-            c1 = df[ic].AO[ii] >= 0.0f;
-            c2 = df[ic].AO[ii - 1] > df[ic].AO[ii];
-            c3 = df[ic].WILLR[ii] < willOverSold;
-            c4 = df[ic].EMA[ema_fast][ii] > df[ic].EMA[ema_slow][ii];
+            const std::vector<float> &ao = *AO[ic];
+            const std::vector<float> &willr = *WILL[ic];
+            const std::vector<float> &srsi = *SRSI[ic];
+            const std::vector<float> &ema_f = *EMA_F[ic];
+            const std::vector<float> &ema_s = *EMA_S[ic];
+
+            c1 = ao[ii] >= 0.0f;
+            c2 = ao[ii - 1] > ao[ii];
+            c3 = willr[ii] < willOverSold;
+            c4 = ema_f[ii] > ema_s[ii];
             OPEN_LONG_CONDI = c1 && c2 && c3 && c4;
-            c1 = df[ic].AO[ii] <= 0.0f;
-            c2 = df[ic].AO[ii - 1] < df[ic].AO[ii];
-            c3 = df[ic].WILLR[ii] > willOverBought;
-            c4 = df[ic].EMA[ema_fast][ii] < df[ic].EMA[ema_slow][ii];
+            c1 = ao[ii] <= 0.0f;
+            c2 = ao[ii - 1] < ao[ii];
+            c3 = willr[ii] > willOverBought;
+            c4 = ema_f[ii] < ema_s[ii];
             OPEN_SHORT_CONDI = c1 && c2 && c3 && c4;
 
-            c1 = (df[ic].AO[ii] < 0.0f && df[ic].StochRSI[ii] > stochOverSold);
-            c2 = (df[ic].WILLR[ii] > willOverBought);
+            c1 = (ao[ii] < 0.0f && srsi[ii] > stochOverSold);
+            c2 = (willr[ii] > willOverBought);
             CLOSE_LONG_CONDI = c1 || c2 || TP_condition;
-            c1 = (df[ic].AO[ii] > 0.0f && df[ic].StochRSI[ii] < stochOverBought);
-            c2 = (df[ic].WILLR[ii] < willOverSold);
+            c1 = (ao[ii] > 0.0f && srsi[ii] < stochOverBought);
+            c2 = (willr[ii] < willOverSold);
             CLOSE_SHORT_CONDI = c1 || c2 || TP_condition;
 
             // IT IS IMPORTANT TO CHECK FIRST FOR CLOSING POSITION AND ONLY THEN FOR OPENING POSITION
@@ -222,13 +267,15 @@ void CALCULATE_INDICATORS(std::vector<KLINEf> &PAIRS, const std::vector<int> &ra
 
     for (uint ic = 0; ic < NB_PAIRS; ic++)
     {
-        PAIRS[ic].StochRSI = TALIB_STOCHRSI_not_averaged(PAIRS[ic].close, 14, 14);
+        PAIRS[ic].indicators.put(IndicatorCache::key("STOCHRSI", 14, 14),
+                                 TALIB_STOCHRSI_not_averaged(PAIRS[ic].close, 14, 14));
     }
     cout << "Calculated STOCHRSI." << std::endl;
 
     for (uint ic = 0; ic < NB_PAIRS; ic++)
     {
-        PAIRS[ic].WILLR = TALIB_WILLR(PAIRS[ic].high, PAIRS[ic].low, PAIRS[ic].close, 14);
+        PAIRS[ic].indicators.put(IndicatorCache::key("WILLR", 14),
+                                 TALIB_WILLR(PAIRS[ic].high, PAIRS[ic].low, PAIRS[ic].close, 14));
     }
     cout << "Calculated WILLR." << std::endl;
 
@@ -237,7 +284,7 @@ void CALCULATE_INDICATORS(std::vector<KLINEf> &PAIRS, const std::vector<int> &ra
     {
         for (const int ema_per : ema_values)
         {
-            PAIRS[ic].EMA[ema_per] = TALIB_EMA(PAIRS[ic].close, ema_per);
+            PAIRS[ic].indicators.put(IndicatorCache::key("EMA", ema_per), TALIB_EMA(PAIRS[ic].close, ema_per));
         }
     }
     cout << "Calculated EMAs." << std::endl;
@@ -279,17 +326,9 @@ int mainProgramLogic()
         std::cout << "  " << YELLOW << dataf << RESET << std::endl;
     }
 
-    TA_RetCode retCode;
-    retCode = TA_Initialize();
-    if (retCode != TA_SUCCESS)
-    {
-        std::cout << "Cannot initialize TA-Lib !\n"
-                  << retCode << "\n";
-    }
-    else
-    {
-        std::cout << "Initialized TA-Lib !\n";
-    }
+    // TA-Lib is initialized once in main(), not here: this function runs on every
+    // worker thread, and one thread's TA_Shutdown() used to land while another was
+    // still computing.
 
     vector<KLINEf> PAIRS{};
     PAIRS.reserve(NB_PAIRS);
@@ -414,8 +453,6 @@ int mainProgramLogic()
     std::cout << "RAM usage                     : " << std::round(ram_usage * 10.0) / 10.0 << " MB" << std::endl;
     std::cout << "--------------------------------------------------------------------------" << std::endl;
 
-    TA_Shutdown();
-
     return 0;
 }
 
@@ -423,21 +460,27 @@ int main()
 {
     const int N = 2; // Number of threads
 
-    // Create a vector to hold the threads
-    std::vector<std::thread> threads;
+    // TA-Lib is a process-wide library: initialize and shut it down exactly once,
+    // around the workers rather than inside each of them.
+    strategy_runner::init_talib();
 
-    // Launch N threads, each running the mainProgramLogic function
+    std::vector<std::thread> threads;
+    threads.reserve(N);
+
+    // Each worker samples the parameter space independently, so they only need distinct
+    // RNG seeds -- which RandomNumberGenerator now provides by mixing in the thread id.
+    // The staggered start this loop used to do (a 5 second sleep between launches) was
+    // working around that seeding being broken.
     for (int i = 0; i < N; ++i)
     {
-        threads.push_back(std::thread(mainProgramLogic));
-        std::this_thread::sleep_for(std::chrono::milliseconds(5000));
+        threads.emplace_back(mainProgramLogic);
     }
 
-    // Wait for all threads to finish
     for (auto &thread : threads)
     {
         thread.join();
     }
 
+    TA_Shutdown();
     return 0;
 }

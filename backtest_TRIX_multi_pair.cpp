@@ -227,7 +227,7 @@ int main()
     cfg.min_dd = MIN_ALLOWED_MAX_DRAWBACK;
     cfg.print_every = 100;
 
-    strategy_runner::sweep(cfg, param_list, [&](const trix_params &p) {
+    strategy_runner::sweep(cfg, std::move(param_list), [&](const trix_params &p) {
         return PROCESS(PAIRS, p.ema1, p.trixLength, p.trixSignal, p.max_open_trades);
     });
 

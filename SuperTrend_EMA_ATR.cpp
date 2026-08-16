@@ -228,7 +228,7 @@ int main()
     cfg.min_dd = MIN_ALLOWED_MAX_DRAWBACK;
     cfg.print_every = 500;
 
-    strategy_runner::sweep(cfg, param_list, [&](const ST_EMA_ATR_params &p) {
+    strategy_runner::sweep(cfg, std::move(param_list), [&](const ST_EMA_ATR_params &p) {
         return PROCESS(PAIRS, p.ema, p.up, p.down, p.max_open_trades);
     });
 

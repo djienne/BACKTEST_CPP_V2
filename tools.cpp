@@ -363,6 +363,12 @@ double read_score(const std::string &out_filename)
 
 void WRITE_OR_UPDATE_BEST_SCORE_FILE(const std::string &STRAT_NAME, const std::string &out_filename, const RUN_RESULTf &result)
 {
+    // Read-modify-write on a shared file. The F_* strategies run this from several
+    // worker threads at once and the multithreaded sweep runner does too, so without
+    // this lock two writers could interleave a truncating open with the other's read
+    // and lose the best result -- or leave the file half-written.
+    static std::mutex score_file_mutex;
+    const std::lock_guard<std::mutex> lock(score_file_mutex);
 
     std::cout << "Reading or updating SCORE FILE..." << std::endl;
     float file_score = 0.0;

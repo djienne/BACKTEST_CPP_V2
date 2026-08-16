@@ -228,7 +228,7 @@ int main()
     cfg.min_dd = MIN_ALLOWED_MAX_DRAWBACK;
     cfg.print_every = 1000;
 
-    strategy_runner::sweep(cfg, param_list, [&](const BBTREND_params &p) {
+    strategy_runner::sweep(cfg, std::move(param_list), [&](const BBTREND_params &p) {
         return PROCESS(PAIRS, p.ema, p.BBlength, p.BBstd, p.max_open_trades);
     });
 

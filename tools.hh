@@ -1,14 +1,6 @@
 #pragma once
 #include <stdio.h>
-// Loud abort with context. Use at unrecoverable failure points in loaders, alignment,
-// etc. — preserves the existing "crash hard" semantics but surfaces the reason before
-// std::abort() instead of dumping a bare exit code.
-#define BACKTEST_FATAL(msg)                                                                             \
-    do                                                                                                  \
-    {                                                                                                   \
-        std::cerr << "FATAL " << __FILE__ << ":" << __LINE__ << " " << (msg) << std::endl;              \
-        std::abort();                                                                                   \
-    } while (0)
+#include "tools_fatal.hh" // BACKTEST_FATAL
 #include <vector>
 #include <array>
 #include <time.h>
@@ -191,15 +183,20 @@ double calculate_calmar_ratio_monthly(const std::vector<int64_t> &times, const s
 
 //////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 
+// `verbose` logs the seed, which is useful once per run but not when shuffling many
+// small groups in a loop -- pass false there.
 template <typename T>
-void random_shuffle_vector(std::vector<T> &vec_in)
+void random_shuffle_vector(std::vector<T> &vec_in, const bool verbose = true)
 {
     std::random_device rd;
     std::mt19937::result_type seed = rd() + std::hash<std::thread::id>{}(std::this_thread::get_id());
     std::mt19937 rng(seed);
     std::shuffle(vec_in.begin(), vec_in.end(), rng);
 
-    std::cout << "Thread " << std::this_thread::get_id() << " Random number seed: " << seed << std::endl;
+    if (verbose)
+    {
+        std::cout << "Thread " << std::this_thread::get_id() << " Random number seed: " << seed << std::endl;
+    }
 };
 
 //////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////

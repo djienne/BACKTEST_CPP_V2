@@ -104,6 +104,21 @@ RUN_RESULTf PROCESS(const vector<KLINEf> &df, const std::vector<fundings> &FUNDI
     bool OPEN_SHORT_CONDI = false;
     bool CLOSE_SHORT_CONDI = false;
 
+    // Hoisted out of the bar loop: these were re-indexed through a 1000-slot array on
+    // every bar, four to six times each.
+    std::array<const std::vector<float> *, NB_PAIRS> EMA_F{};
+    std::array<const std::vector<float> *, NB_PAIRS> EMA_S{};
+    std::array<const std::vector<float> *, NB_PAIRS> ST{};
+    const std::string emaf_key = IndicatorCache::key("EMA_1h", ema_f);
+    const std::string emas_key = IndicatorCache::key("EMA_1h", ema_s);
+    const std::string st_key = IndicatorCache::key("SUPERTREND_1h");
+    for (uint ic = 0; ic < NB_PAIRS; ic++)
+    {
+        EMA_F[ic] = &df[ic].indicators.get(emaf_key);
+        EMA_S[ic] = &df[ic].indicators.get(emas_key);
+        ST[ic] = &df[ic].indicators.get(st_key);
+    }
+
     const uint ii_begin = start_indexes[0];
 
     for (uint ii = ii_begin; ii < nb_max; ii++)
@@ -126,14 +141,18 @@ RUN_RESULTf PROCESS(const vector<KLINEf> &df, const std::vector<fundings> &FUNDI
 
             trade_core::apply_funding_fee(portfolio, ic, df[ic].close[ii], funding_fee);
 
+            const std::vector<float> &ema_fast_v = *EMA_F[ic];
+            const std::vector<float> &ema_slow_v = *EMA_S[ic];
+            const std::vector<float> &st = *ST[ic];
+
             // conditions for open / close position
-            const bool c_cross = df[ic].high[ii] > df[ic].EMA_1h[ema_f][ii] && df[ic].low[ii] < df[ic].EMA_1h[ema_f][ii];
+            const bool c_cross = df[ic].high[ii] > ema_fast_v[ii] && df[ic].low[ii] < ema_fast_v[ii];
 
-            OPEN_LONG_CONDI = df[ic].EMA_1h[ema_f][ii] > df[ic].EMA_1h[ema_s][ii] && df[ic].SuperTrend_1h[ii] == 1 && c_cross;
-            OPEN_SHORT_CONDI = df[ic].EMA_1h[ema_f][ii] < df[ic].EMA_1h[ema_s][ii] && df[ic].SuperTrend_1h[ii] == -1 && c_cross;
+            OPEN_LONG_CONDI = ema_fast_v[ii] > ema_slow_v[ii] && st[ii] == 1 && c_cross;
+            OPEN_SHORT_CONDI = ema_fast_v[ii] < ema_slow_v[ii] && st[ii] == -1 && c_cross;
 
-            CLOSE_LONG_CONDI = (df[ic].EMA_1h[ema_f][ii] < df[ic].EMA_1h[ema_s][ii] || df[ic].SuperTrend_1h[ii] == -1) && c_cross;
-            CLOSE_SHORT_CONDI = (df[ic].EMA_1h[ema_f][ii] > df[ic].EMA_1h[ema_s][ii] || df[ic].SuperTrend_1h[ii] == 1) && c_cross;
+            CLOSE_LONG_CONDI = (ema_fast_v[ii] < ema_slow_v[ii] || st[ii] == -1) && c_cross;
+            CLOSE_SHORT_CONDI = (ema_fast_v[ii] > ema_slow_v[ii] || st[ii] == 1) && c_cross;
 
             // IT IS IMPORTANT TO CHECK FIRST FOR CLOSING POSITION AND ONLY THEN FOR OPENING POSITION
 
@@ -217,13 +236,15 @@ void CALCULATE_INDICATORS(std::vector<KLINEf> &PAIRS, const int ltf_in_minutes, 
 
         /// Supertrend
         const std::vector<float> st_htf = TALIB_SuperTrend_dir_only(htf.kline.high, htf.kline.low, htf.kline.close, ST_ATRper, ST_mult);
-        PAIRS[ic].SuperTrend_1h = PROJECT_HTF_TO_LTF(st_htf, splitSize, ltf_size, htf.ltf_offset, 0.0f);
+        PAIRS[ic].indicators.put(IndicatorCache::key("SUPERTREND_1h"),
+                                 PROJECT_HTF_TO_LTF(st_htf, splitSize, ltf_size, htf.ltf_offset, 0.0f));
 
         /// EMAs
         for (const int ema_per : ema_values)
         {
             const std::vector<float> ema_htf = TALIB_EMA(htf.kline.close, ema_per);
-            PAIRS[ic].EMA_1h[ema_per] = PROJECT_HTF_TO_LTF(ema_htf, splitSize, ltf_size, htf.ltf_offset, 0.0f);
+            PAIRS[ic].indicators.put(IndicatorCache::key("EMA_1h", ema_per),
+                                     PROJECT_HTF_TO_LTF(ema_htf, splitSize, ltf_size, htf.ltf_offset, 0.0f));
         }
     }
 

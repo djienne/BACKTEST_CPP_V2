@@ -85,9 +85,43 @@ RUN_RESULTf PROCESS(vector<KLINEf> &df, const std::vector<fundings> &FUNDINGS, c
 {
     nb_tested++;
 
+    // Bollinger bands depend only on (BBlength, BBstd). This strategy samples the
+    // parameter space at random, so only the current band set is held: there are ~4,800
+    // reachable (length, std) combinations and caching all of them across 11 pairs would
+    // run to gigabytes.
+    const std::string bb_key = IndicatorCache::key("BBANDS", BBlength, BBstd);
+    static std::string cached_bb_key;
+    if (bb_key != cached_bb_key)
+    {
+        for (uint ic = 0; ic < NB_PAIRS; ic++)
+        {
+            df[ic].indicators.erase(cached_bb_key + ":U");
+            df[ic].indicators.erase(cached_bb_key + ":M");
+            df[ic].indicators.erase(cached_bb_key + ":L");
+
+            BandsResult bands = TALIB_BBANDS_R(df[ic].close, BBstd, BBstd, BBlength);
+            df[ic].indicators.put(bb_key + ":U", std::move(bands.upper));
+            df[ic].indicators.put(bb_key + ":M", std::move(bands.middle));
+            df[ic].indicators.put(bb_key + ":L", std::move(bands.lower));
+        }
+        cached_bb_key = bb_key;
+    }
+
+    std::array<const std::vector<float> *, NB_PAIRS> BB_U{};
+    std::array<const std::vector<float> *, NB_PAIRS> BB_M{};
+    std::array<const std::vector<float> *, NB_PAIRS> BB_L{};
     for (uint ic = 0; ic < NB_PAIRS; ic++)
     {
-        TALIB_BBANDS(df[ic].close, BBstd, BBstd, BBlength, df[ic].BollB_U, df[ic].BollB_M, df[ic].BollB_L);
+        BB_U[ic] = &df[ic].indicators.get(bb_key + ":U");
+        BB_M[ic] = &df[ic].indicators.get(bb_key + ":M");
+        BB_L[ic] = &df[ic].indicators.get(bb_key + ":L");
+    }
+
+    std::array<const std::vector<float> *, NB_PAIRS> EMA{};
+    const std::string ema_key = IndicatorCache::key("EMA", ema_v);
+    for (uint ic = 0; ic < NB_PAIRS; ic++)
+    {
+        EMA[ic] = &df[ic].indicators.get(ema_key);
     }
 
     RUN_RESULTf result{};
@@ -142,10 +176,15 @@ RUN_RESULTf PROCESS(vector<KLINEf> &df, const std::vector<fundings> &FUNDINGS, c
 
             trade_core::apply_funding_fee(portfolio, ic, df[ic].close[ii], funding_fee);
 
-            OPEN_LONG_CONDI = df[ic].close[ii - 1] < df[ic].BollB_U[ii - 1] && df[ic].close[ii] > df[ic].BollB_U[ii] && df[ic].close[ii] > df[ic].EMA[ema_v][ii];
-            OPEN_SHORT_CONDI = df[ic].close[ii - 1] > df[ic].BollB_L[ii - 1] && df[ic].close[ii] < df[ic].BollB_L[ii] && df[ic].close[ii] < df[ic].EMA[ema_v][ii];
-            CLOSE_LONG_CONDI = df[ic].close[ii] < df[ic].BollB_M[ii];
-            CLOSE_SHORT_CONDI = df[ic].close[ii] > df[ic].BollB_M[ii];
+            const std::vector<float> &bb_u = *BB_U[ic];
+            const std::vector<float> &bb_m = *BB_M[ic];
+            const std::vector<float> &bb_l = *BB_L[ic];
+            const std::vector<float> &ema = *EMA[ic];
+
+            OPEN_LONG_CONDI = df[ic].close[ii - 1] < bb_u[ii - 1] && df[ic].close[ii] > bb_u[ii] && df[ic].close[ii] > ema[ii];
+            OPEN_SHORT_CONDI = df[ic].close[ii - 1] > bb_l[ii - 1] && df[ic].close[ii] < bb_l[ii] && df[ic].close[ii] < ema[ii];
+            CLOSE_LONG_CONDI = df[ic].close[ii] < bb_m[ii];
+            CLOSE_SHORT_CONDI = df[ic].close[ii] > bb_m[ii];
 
             // IT IS IMPORTANT TO CHECK FIRST FOR CLOSING POSITION AND ONLY THEN FOR OPENING POSITION
 
@@ -220,7 +259,7 @@ void CALCULATE_INDICATORS(std::vector<KLINEf> &PAIRS)
 
         for (const uint ema_per : range_EMA)
         {
-            PAIRS[ic].EMA[ema_per] = TALIB_EMA(PAIRS[ic].close, ema_per);
+            PAIRS[ic].indicators.put(IndicatorCache::key("EMA", ema_per), TALIB_EMA(PAIRS[ic].close, ema_per));
         }
     }
 
