@@ -36,6 +36,9 @@ int main()
     std::cout << "SPOT_ROWS " << btc_spot.nb << "\n";
     std::cout << "EMA11_TAIL_SUM " << tail_sum(ema_fast, 5) << "\n";
     std::cout << "EMA448_TAIL_SUM " << tail_sum(ema_slow, 5) << "\n";
+    // Volume is loaded now rather than parsed and dropped; pin it so a loader change
+    // that silently stops populating it fails the gate.
+    std::cout << "VOLUME_TAIL_SUM " << tail_sum(btc_spot.volume, 5) << "\n";
     std::cout << "BBANDS_TAIL_SUM " << tail_sum(bb_upper, 5) << " " << tail_sum(bb_middle, 5) << " " << tail_sum(bb_lower, 5) << "\n";
 
     std::vector<KLINEf> aligned_pairs{};

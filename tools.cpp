@@ -517,6 +517,7 @@ void realign_timestamps(const KLINEf &klines_btc, KLINEf &klines2) // klines2 wi
         output_KLINE.high[i] = klines2.high[j];
         output_KLINE.low[i] = klines2.low[j];
         output_KLINE.close[i] = klines2.close[j];
+        output_KLINE.volume[i] = klines2.volume[j];
     }
 
     klines2 = output_KLINE;
@@ -547,6 +548,7 @@ std::vector<uint> INITIALIZE_DATA(std::vector<KLINEf> &PAIRS)
             PAIRS[ic].high.erase(PAIRS[ic].high.begin(), PAIRS[ic].high.begin() + 3000);
             PAIRS[ic].low.erase(PAIRS[ic].low.begin(), PAIRS[ic].low.begin() + 3000);
             PAIRS[ic].close.erase(PAIRS[ic].close.begin(), PAIRS[ic].close.begin() + 3000);
+            PAIRS[ic].volume.erase(PAIRS[ic].volume.begin(), PAIRS[ic].volume.begin() + 3000);
             PAIRS[ic].nb = PAIRS[ic].close.size();
         }
     }
@@ -589,6 +591,7 @@ std::vector<uint> INITIALIZE_DATA(std::vector<KLINEf> &PAIRS)
             PAIRS[ic].high = add_zeros(PAIRS[ic].high, nb_to_add);
             PAIRS[ic].low = add_zeros(PAIRS[ic].low, nb_to_add);
             PAIRS[ic].close = add_zeros(PAIRS[ic].close, nb_to_add);
+            PAIRS[ic].volume = add_zeros(PAIRS[ic].volume, nb_to_add);
         }
 
         PAIRS[ic].nb = PAIRS[0].close.size();
@@ -671,6 +674,7 @@ KLINEf read_input_data(const std::string &input_file_path)
         kline.high.push_back(hi);
         kline.low.push_back(lo);
         kline.close.push_back(cl);
+        kline.volume.push_back(vol);
         nb_read++;
     }
 
@@ -712,6 +716,7 @@ KLINEf read_input_data_f(const std::string &input_file_path, const std::string &
     kline.high.reserve(jsonData.size());
     kline.low.reserve(jsonData.size());
     kline.close.reserve(jsonData.size());
+    kline.volume.reserve(jsonData.size());
 
     // Iterate over the elements
     for (const auto &item : jsonData)
@@ -740,6 +745,7 @@ KLINEf read_input_data_f(const std::string &input_file_path, const std::string &
         kline.high.push_back(hi);
         kline.low.push_back(lo);
         kline.close.push_back(cl);
+        kline.volume.push_back(vol);
         nb_read++;
     }
 

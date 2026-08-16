@@ -15,6 +15,10 @@ struct KLINEf
     std::vector<float> high;
     std::vector<float> low;
     std::vector<float> close;
+    // Base-asset volume. Both loaders always parsed this column and then discarded it,
+    // which made the whole volume indicator family (OBV, MFI, A/D, VWAP, relative
+    // volume) unreachable.
+    std::vector<float> volume;
     std::array<std::vector<float>, 1000> EMA;
     std::array<std::vector<float>, 1000> EMA_1h;
     uint nb;

@@ -52,7 +52,7 @@ LDLIBS   := $(TALIB_LIB) -lpthread
 OBJDIR := build/$(BUILD)
 
 # Shared library layer, linked into every binary.
-COMMON_SRC := custom_talib_wrapper.cpp tools.cpp trade_core.cpp
+COMMON_SRC := indicators.cpp tools.cpp trade_core.cpp
 # Non-strategy executables (unit tests + numeric regression harnesses).
 DRIVER_SRC := tests.cpp verification_regression.cpp strategy_regression.cpp
 # Everything else in the root is a strategy.

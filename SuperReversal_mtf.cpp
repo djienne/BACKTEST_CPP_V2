@@ -156,81 +156,24 @@ void CALCULATE_INDICATORS(std::vector<KLINEf> &PAIRS, const int ltf_in_minutes, 
 
     std::vector<int> ema_values = combineAndRemoveDuplicates(range_ema_fast, range_ema_slow);
 
-    // calculate htf KLines from ltf KLines
-
+    // Aggregate to the higher timeframe, compute there, then project back down.
+    // RESAMPLE_TIMEFRAME / PROJECT_HTF_TO_LTF own the boundary alignment and the
+    // anti-lookahead shift that this function used to hand-roll per indicator.
     for (uint ic = 0; ic < NB_PAIRS; ic++)
     {
-
-        const std::vector<std::vector<float>> s_open = splitVector(PAIRS[ic].open, splitSize);
-        const std::vector<std::vector<float>> s_high = splitVector(PAIRS[ic].high, splitSize);
-        const std::vector<std::vector<float>> s_low = splitVector(PAIRS[ic].low, splitSize);
-        const std::vector<std::vector<float>> s_close = splitVector(PAIRS[ic].close, splitSize);
-
-        std::vector<float> open_htf{};
-        std::vector<float> high_htf{};
-        std::vector<float> low_htf{};
-        std::vector<float> close_htf{};
-
-        const int nb_htf = s_close.size();
-        open_htf.reserve(nb_htf);
-        high_htf.reserve(nb_htf);
-        low_htf.reserve(nb_htf);
-        close_htf.reserve(nb_htf);
-
-        for (size_t is = 0; is < s_close.size(); is++)
-        {
-            const int last_idx = s_close[is].size() - 1;
-            open_htf.push_back(s_open[is][0]);
-            close_htf.push_back(s_close[is][last_idx]);
-            high_htf.push_back(*std::max_element(s_high[is].begin(), s_high[is].end()));
-            low_htf.push_back(*std::min_element(s_low[is].begin(), s_low[is].end()));
-        }
+        const Resampled htf = RESAMPLE_TIMEFRAME(PAIRS[ic], splitSize, ltf_in_minutes, htf_in_minutes);
+        const size_t ltf_size = PAIRS[ic].close.size();
 
         /// Supertrend
-        std::vector<float> SuperTrend = TALIB_SuperTrend_dir_only(high_htf, low_htf, close_htf, 15, 5);
-
-        // resampling to lower time frame by duplicating elements and shifting values to the right (to avoid forward looking bias)
-        SuperTrend = duplicateElements(SuperTrend, splitSize);
-        SuperTrend.insert(SuperTrend.begin(), splitSize, -777);           // add 12 zeros a the beginning
-        SuperTrend.erase(SuperTrend.end() - splitSize, SuperTrend.end()); // remove the 12 last elements
-
-        if (std::abs(int(SuperTrend.size()) - int(PAIRS[ic].open.size())) > splitSize)
-        {
-            std::cout << "Error when calculating the htf supertrend into the ltf." << std::endl;
-            std::cout << ic << " " << SuperTrend_ltf[ic].size() << " " << PAIRS[ic].open.size() << std::endl;
-            std::abort();
-        }
-
-        // remove end elements if necessary
-
-        while (SuperTrend.size() != PAIRS[ic].open.size())
-        {
-            SuperTrend.pop_back();
-        }
-
-        SuperTrend_ltf[ic] = SuperTrend;
+        const std::vector<float> st_htf = TALIB_SuperTrend_dir_only(htf.kline.high, htf.kline.low, htf.kline.close, 15, 5.0f);
+        SuperTrend_ltf[ic] = PROJECT_HTF_TO_LTF(st_htf, splitSize, ltf_size, htf.ltf_offset, -777.0f);
 
         /// EMAs
         for (const int ema_per : ema_values)
         {
             const std::string str = "EMA_" + std::to_string(ema_per) + "_1h";
-            EMA_LISTS[ic][str] = TALIB_EMA(close_htf, ema_per);
-
-            // resampling to lower time frame by duplicating elements and shifting values to the right (to avoid forward looking bias)
-            EMA_LISTS[ic][str] = duplicateElements(EMA_LISTS[ic][str], splitSize);
-            EMA_LISTS[ic][str].insert(EMA_LISTS[ic][str].begin(), splitSize, -777);                   // add 12 zeros a the beginning
-            EMA_LISTS[ic][str].erase(EMA_LISTS[ic][str].end() - splitSize, EMA_LISTS[ic][str].end()); // remove the 12 last elements
-
-            if (std::abs(int(EMA_LISTS[ic][str].size()) - int(PAIRS[ic].open.size())) > splitSize)
-            {
-                std::cout << "Error when calculating the htf EMAs into the ltf." << std::endl;
-                std::abort();
-            }
-
-            while (EMA_LISTS[ic][str].size() != PAIRS[ic].open.size())
-            {
-                EMA_LISTS[ic][str].pop_back();
-            }
+            const std::vector<float> ema_htf = TALIB_EMA(htf.kline.close, ema_per);
+            EMA_LISTS[ic][str] = PROJECT_HTF_TO_LTF(ema_htf, splitSize, ltf_size, htf.ltf_offset, -777.0f);
         }
     }
 
