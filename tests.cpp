@@ -518,6 +518,41 @@ void test_calculate_calmar_ratio()
     REQUIRE(std::isfinite(calculate_calmar_ratio_monthly(ts, wv, 0.0)));
 }
 
+void test_convert_to_unix_timestamp_is_utc()
+{
+    // Regression: this used std::mktime, which reads the tm as *local* time. Since
+    // read_input_data_f uses the result as a row cutoff, the number of rows loaded from
+    // a futures file depended on the machine's timezone -- CI on UTC loaded one more row
+    // than a UTC+2 laptop, which is how it surfaced.
+    //
+    // 2023-06-18 00:00:00 UTC.
+    REQUIRE(convertToUnixTimestamp("2023-06-18") == 1687046400);
+    // 1970-01-01 is the epoch itself, so any local-time offset shows up as non-zero.
+    REQUIRE(convertToUnixTimestamp("1970-01-01") == 0);
+    // Past the signed-32-bit boundary: 2040-01-01 00:00:00 UTC.
+    REQUIRE(convertToUnixTimestamp("2040-01-01") == 2208988800);
+    // Unparseable input keeps its -1 sentinel.
+    REQUIRE(convertToUnixTimestamp("not-a-date") == -1);
+
+    // Round-trips through the UTC calendar helpers.
+    const int64_t ts = convertToUnixTimestamp("2023-06-18");
+    REQUIRE(get_year_from_timestamp(ts) == 2023);
+    REQUIRE(get_month_from_timestamp(ts) == 6);
+    REQUIRE(get_day_from_timestamp(ts) == 18);
+    REQUIRE(get_hour_from_timestamp(ts) == 0);
+
+    // getCurrentDateMinusTwoDays must parse back and land two days before today (UTC),
+    // which is only true if both functions agree on the timezone.
+    const std::string two_days_ago = getCurrentDateMinusTwoDays();
+    REQUIRE(two_days_ago.size() == 10);
+    const int64_t parsed = convertToUnixTimestamp(two_days_ago);
+    REQUIRE(parsed > 0);
+    const int64_t now = static_cast<int64_t>(std::time(nullptr));
+    const int64_t age_days = (now - parsed) / 86400;
+    REQUIRE(age_days >= 2);
+    REQUIRE(age_days <= 3); // 2 whole days plus however far into today we are
+}
+
 void test_generate_range_int()
 {
     // Regression: the step was an integer division, so the range never reached vmax.
@@ -1174,6 +1209,7 @@ const NamedTest ALL_TESTS[] = {
     {"integer_range", test_integer_range},
     {"generate_range_int", test_generate_range_int},
     {"utc_timestamp_helpers", test_utc_timestamp_helpers},
+    {"convert_to_unix_timestamp_is_utc", test_convert_to_unix_timestamp_is_utc},
     {"float_range_N1", test_float_range_N1},
     {"find_max_all_negative", test_find_max_all_negative},
     {"find_min_all_positive", test_find_min_all_positive},

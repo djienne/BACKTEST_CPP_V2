@@ -922,6 +922,13 @@ std::vector<int> generateRange_int(const int &vmin, const int &vmax, const int &
     return result;
 }
 //////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
+// Parses "YYYY-MM-DD" as midnight **UTC**.
+//
+// This used std::mktime, which interprets the tm as local time. read_input_data_f uses
+// the result as a cutoff, so the number of rows loaded from a futures file depended on
+// the machine's timezone -- the same data and the same max_time gave a different row
+// count on a UTC+2 laptop than on a UTC CI runner, which is how this surfaced. timegm is
+// the UTC counterpart and matches the UTC convention the rest of the codebase uses.
 time_t convertToUnixTimestamp(const std::string &dateString)
 {
     std::tm timeStruct = {};
@@ -938,8 +945,7 @@ time_t convertToUnixTimestamp(const std::string &dateString)
     timeStruct.tm_min = 0;
     timeStruct.tm_sec = 0;
 
-    time_t unixTimestamp = std::mktime(&timeStruct);
-    return unixTimestamp;
+    return timegm(&timeStruct);
 }
 
 #include <iostream>
@@ -949,25 +955,19 @@ time_t convertToUnixTimestamp(const std::string &dateString)
 
 //////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 
+// "YYYY-MM-DD" for two days ago, in UTC. Pairs with convertToUnixTimestamp, so both ends
+// of a max_time cutoff agree; localtime() here would have reintroduced the same
+// timezone dependence, and is not reentrant.
 std::string getCurrentDateMinusTwoDays()
 {
-    // Get the current time
     const std::chrono::system_clock::time_point now = std::chrono::system_clock::now();
-
-    // Subtract two days from the current time
     const std::chrono::hours twoDays(48);
-    const std::chrono::system_clock::time_point twoDaysAgo = now - twoDays;
+    const std::time_t time = std::chrono::system_clock::to_time_t(now - twoDays);
 
-    // Convert the time point to a time_t
-    const std::time_t time = std::chrono::system_clock::to_time_t(twoDaysAgo);
+    std::tm timeStruct{};
+    gmtime_r(&time, &timeStruct);
 
-    // Convert the time_t to a struct tm
-    const std::tm *timeStruct = std::localtime(&time);
-
-    // Format the date as a string
     std::stringstream ss;
-    ss << std::put_time(timeStruct, "%Y-%m-%d");
-    const std::string date = ss.str();
-
-    return date;
+    ss << std::put_time(&timeStruct, "%Y-%m-%d");
+    return ss.str();
 }
