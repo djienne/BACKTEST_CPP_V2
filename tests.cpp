@@ -711,6 +711,66 @@ void test_strategy_param_structs_are_fully_initialized()
     REQUIRE(sr.max_open_trades == 4);
 }
 
+// Mirrors the long take-profit / stop-loss test SuperTrend_EMA_ATR and F_3EMA_SRSI_ATR
+// both use, so the convention is pinned in one place.
+struct LongExit
+{
+    bool take_profit_hit;
+    bool stop_loss_hit;
+};
+
+LongExit evaluate_long_exit(const float bar_high, const float bar_low,
+                            const float take_profit, const float stop_loss)
+{
+    return {bar_high >= take_profit, bar_low <= stop_loss};
+}
+
+void test_long_stop_and_target_use_the_right_bar_extreme()
+{
+    // A long is stopped out when the price trades DOWN to the stop, i.e. when the bar's
+    // low reaches it -- and takes profit when the bar's high reaches the target.
+    //
+    // SuperTrend_EMA_ATR had these inverted: it tested `high < stop_loss`, which requires
+    // the entire bar to sit below the stop. Since high >= low that is strictly harder to
+    // satisfy than the price touching the stop, so the stop only fired after the market
+    // had already traded clean through it.
+    const float entry = 100.0f;
+    const float take_profit = 110.0f;
+    const float stop_loss = 95.0f;
+
+    // Bar dips to the stop and recovers to close above it: stopped out.
+    LongExit e = evaluate_long_exit(/*high=*/104.0f, /*low=*/94.0f, take_profit, stop_loss);
+    REQUIRE(e.stop_loss_hit);
+    REQUIRE(!e.take_profit_hit);
+
+    // The old inverted test would NOT have fired on that bar, because its high (104) is
+    // not below the stop (95). This is the regression.
+    REQUIRE(!(104.0f < stop_loss));
+
+    // Bar spikes to the target and closes back below: target reached.
+    e = evaluate_long_exit(/*high=*/112.0f, /*low=*/101.0f, take_profit, stop_loss);
+    REQUIRE(e.take_profit_hit);
+    REQUIRE(!e.stop_loss_hit);
+
+    // Quiet bar between the two levels: neither.
+    e = evaluate_long_exit(/*high=*/105.0f, /*low=*/99.0f, take_profit, stop_loss);
+    REQUIRE(!e.take_profit_hit);
+    REQUIRE(!e.stop_loss_hit);
+
+    // Exactly touching either level counts as reached.
+    e = evaluate_long_exit(/*high=*/110.0f, /*low=*/95.0f, take_profit, stop_loss);
+    REQUIRE(e.take_profit_hit);
+    REQUIRE(e.stop_loss_hit);
+
+    // A gap straight through the stop must still register.
+    e = evaluate_long_exit(/*high=*/90.0f, /*low=*/85.0f, take_profit, stop_loss);
+    REQUIRE(e.stop_loss_hit);
+
+    // Sanity: the stop sits below entry and the target above it.
+    REQUIRE(stop_loss < entry);
+    REQUIRE(take_profit > entry);
+}
+
 void test_first_tradable_index()
 {
     // Takes the worst warmup among the indicators in use...
@@ -1246,6 +1306,7 @@ const NamedTest ALL_TESTS[] = {
     {"project_htf_to_ltf_has_no_lookahead", test_project_htf_to_ltf_has_no_lookahead},
     {"first_tradable_index", test_first_tradable_index},
     {"strategy_param_structs_are_fully_initialized", test_strategy_param_structs_are_fully_initialized},
+    {"long_stop_and_target_use_the_right_bar_extreme", test_long_stop_and_target_use_the_right_bar_extreme},
     {"random_number_generator_seeding", test_random_number_generator_seeding},
     {"record_wallet_snapshot_drawdown", test_record_wallet_snapshot_drawdown},
     {"futures_long_close_sign", test_futures_long_close_sign},

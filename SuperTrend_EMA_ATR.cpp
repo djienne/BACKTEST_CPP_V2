@@ -107,8 +107,34 @@ RUN_RESULTf PROCESS(const vector<KLINEf> &PAIRS, const int ema_v, const float UP
 
             // conditions for open / close position
 
-            OPEN_LONG_CONDI = PAIRS[ic].close[ii] > EMA_LISTS[ic]["EMA_" + std::to_string(ema_v)][ii] && BollB[ic].supertrend[ii] == 1;
-            CLOSE_LONG_CONDI = PAIRS[ic].low[ii] < EMA_LISTS[ic]["EMA_" + std::to_string(ema_v)][ii] || BollB[ic].supertrend[ii] == -1 || PAIRS[ic].close[ii] > take_profit[ic] || PAIRS[ic].high[ii] < stop_loss[ic];
+            const std::vector<float> &ema_series = EMA_LISTS[ic]["EMA_" + std::to_string(ema_v)];
+
+            OPEN_LONG_CONDI = PAIRS[ic].close[ii] > ema_series[ii] && BollB[ic].supertrend[ii] == 1;
+
+            // Exit on trend reversal, or on the ATR take-profit / stop-loss being reached
+            // during the bar.
+            //
+            // The TP and SL comparisons were inverted: take-profit tested `close > TP`
+            // and the stop tested `high < SL`. For a long, `high < SL` requires the whole
+            // bar -- including its high -- to sit below the stop, and since high >= low it
+            // is strictly harder to satisfy than the price actually touching the stop. The
+            // stop therefore only fired once the market had already traded clean through
+            // it, one or more bars late.
+            //
+            // Corrected to the intrabar convention this codebase already uses elsewhere
+            // (see the CLOSE_LONG_CONDI in F_3EMA_SRSI_ATR.cpp): a long take-profit is
+            // reached when the bar's high gets there, and a long stop when the bar's low
+            // does.
+            // TP/SL are only meaningful while a position is open: they are set on entry
+            // and keep stale values afterwards. Gating on the position also avoids the
+            // trap that a zeroed take_profit would make `high >= take_profit` trivially
+            // true for every bar.
+            const bool has_position = portfolio.coin_amounts[ic] > 0.0f;
+            const bool trend_exit = PAIRS[ic].low[ii] < ema_series[ii] || BollB[ic].supertrend[ii] == -1;
+            const bool take_profit_hit = has_position && PAIRS[ic].high[ii] >= take_profit[ic];
+            const bool stop_loss_hit = has_position && PAIRS[ic].low[ii] <= stop_loss[ic];
+
+            CLOSE_LONG_CONDI = trend_exit || take_profit_hit || stop_loss_hit;
 
             // IT IS IMPORTANT TO CHECK FIRST FOR CLOSING POSITION AND ONLY THEN FOR OPENING POSITION
 
