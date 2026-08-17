@@ -633,6 +633,36 @@ void test_random_number_generator_seeding()
     REQUIRE(c.getRandomNumber(0) == 0);
 }
 
+void test_first_tradable_index()
+{
+    // Takes the worst warmup among the indicators in use...
+    REQUIRE(strategy_runner::first_tradable_index({10, 250, 33}) == 250);
+    // ...but never starts before the pair's own data does...
+    REQUIRE(strategy_runner::first_tradable_index({10, 250, 33}, 600) == 600);
+    REQUIRE(strategy_runner::first_tradable_index({10, 250, 33}, 100) == 250);
+    // ...and leaves room for strategies that read backwards from the current bar.
+    REQUIRE(strategy_runner::first_tradable_index({10, 250}, 100, 2) == 252);
+    REQUIRE(strategy_runner::first_tradable_index({}, 0, 0) == 0);
+
+    // The point of it: a real warmup drives the start index, so raising an indicator
+    // period cannot quietly outgrow a hard-coded constant.
+    TA_Initialize();
+    std::vector<float> series;
+    for (int i = 0; i < 900; ++i)
+    {
+        series.push_back(100.0f + static_cast<float>(i));
+    }
+    size_t warm_short = 0;
+    size_t warm_long = 0;
+    TALIB_EMA(series, 50, &warm_short);
+    TALIB_EMA(series, 800, &warm_long);
+    const uint begin = strategy_runner::first_tradable_index({warm_short, warm_long}, 600);
+    // The 800-period EMA warms up past the old hard-coded 600.
+    REQUIRE(begin == static_cast<uint>(warm_long));
+    REQUIRE(begin > 600);
+    TA_Shutdown();
+}
+
 void test_strategy_runner_sweep_filters()
 {
     // Exercise the gating predicate: only results that pass all filters should
@@ -1136,6 +1166,7 @@ const NamedTest ALL_TESTS[] = {
     {"resample_timeframe", test_resample_timeframe},
     {"resample_timeframe_off_boundary_start", test_resample_timeframe_off_boundary_start},
     {"project_htf_to_ltf_has_no_lookahead", test_project_htf_to_ltf_has_no_lookahead},
+    {"first_tradable_index", test_first_tradable_index},
     {"random_number_generator_seeding", test_random_number_generator_seeding},
     {"record_wallet_snapshot_drawdown", test_record_wallet_snapshot_drawdown},
     {"futures_long_close_sign", test_futures_long_close_sign},

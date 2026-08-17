@@ -63,7 +63,10 @@ Three conventions every indicator follows:
 2. **Warmup is reported, never hidden.** Single-output wrappers take an optional
    `size_t *warmup`; multi-output structs carry a `warmup` field. `series[i]` is a real
    value only for `i >= warmup` — reading earlier compares against zero padding, which is
-   how a strategy silently trades on nothing.
+   how a strategy silently trades on nothing. Derive the loop start with
+   `strategy_runner::first_tradable_index({warm_a, warm_b}, start_indexes[0], lookback)`
+   rather than a hard-coded constant, so raising an indicator period cannot quietly
+   outgrow it.
 3. **Empty input gives empty output**, rather than aborting.
 
 Then add a test in `tests.cpp`. Assert output length, warmup position, **and at least one

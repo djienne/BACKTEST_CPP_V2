@@ -68,6 +68,10 @@ uint nb_tested = 0;
 // depends on a swept parameter but not on all of them can instead be cached lazily
 // inside PROCESS -- see the AO handling in BigWill.cpp.
 
+// Worst warmup across every indicator computed below, so PROCESS can start its loop
+// past the zero padding instead of guessing a constant.
+size_t g_worst_warmup = 0;
+
 void CALCULATE_INDICATORS(vector<KLINEf> &PAIRS)
 {
     std::cout << "Calculating indicators..." << std::endl;
@@ -76,17 +80,21 @@ void CALCULATE_INDICATORS(vector<KLINEf> &PAIRS)
     {
         for (const int period : range_rsi_period)
         {
+            size_t warmup = 0;
             PAIRS[ic].indicators.put(IndicatorCache::key("RSI", period),
-                                     TALIB_RSI(PAIRS[ic].close, period));
+                                     TALIB_RSI(PAIRS[ic].close, period, &warmup));
+            g_worst_warmup = std::max(g_worst_warmup, warmup);
         }
         for (const int period : range_ema_period)
         {
+            size_t warmup = 0;
             PAIRS[ic].indicators.put(IndicatorCache::key("EMA", period),
-                                     TALIB_EMA(PAIRS[ic].close, period));
+                                     TALIB_EMA(PAIRS[ic].close, period, &warmup));
+            g_worst_warmup = std::max(g_worst_warmup, warmup);
         }
     }
 
-    std::cout << "Done." << std::endl;
+    std::cout << "Done. Worst indicator warmup: " << g_worst_warmup << " bars." << std::endl;
 }
 
 //////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
@@ -115,7 +123,9 @@ RUN_RESULTf PROCESS(vector<KLINEf> &PAIRS, const TemplateParams &p)
     }
 
     const uint nb_max = PAIRS[0].nb;
-    const uint ii_begin = start_indexes[0];
+    // Start past both the indicator warmup and the pair's own history, rather than a
+    // hard-coded constant that a larger indicator period could silently outgrow.
+    const uint ii_begin = strategy_runner::first_tradable_index({g_worst_warmup}, start_indexes[0]);
 
     for (uint ii = ii_begin; ii < nb_max; ii++)
     {

@@ -13,13 +13,28 @@ SuperTrend, Bollinger breakout, TRIX, and others), built on TA-Lib.
 
 ## Performance
 
-End-to-end benchmark for the simple 2-EMA crossover on `BTC-USDT 1h`:
+End-to-end benchmark for the simple 2-EMA crossover on `BTC-USDT 1h`, all three measured
+on the same machine:
 
 | Implementation | Parameter sweep | Total time | Relative to C++ |
 | --- | ---: | ---: | ---: |
 | C++ | 174,936 pairs | 12.99 s | 1.00x |
 | Python + Numba | 174,936 pairs | 39.80 s | 3.06x slower |
 | Pure Python | 174,936 pairs | ~6323 s | 486x slower (estimated) |
+
+Absolute times are strongly hardware- and filesystem-dependent — the same C++ binary
+takes roughly 21 s under WSL on an NTFS mount. Treat the ratios as the claim, not the
+seconds. The Python implementations are in `python/`.
+
+Two deliberate trade-offs affect the C++ figure:
+
+- Wallet and fee arithmetic moved from `float` to `double`, which costs roughly 10–15% on
+  this particular strategy (measured before/after on one machine, with overlapping run-to-run
+  ranges) and buys a wallet that no longer accumulates float rounding error into the very
+  number the sweep ranks on. Winning parameters are unchanged.
+- Strategies that recompute an indicator the sweep does not vary now cache it. That runs
+  the other way, and much further: `BigWill` went from 33 to 163 backtests/second with
+  peak memory falling from 2,194 MB to 224 MB.
 
 ## Getting started
 
@@ -44,7 +59,10 @@ cd ..
 Build TA-Lib **serially** — its own `src/tools/gen_code` target races under `make -j` and
 will fail intermittently. The backtester itself builds fine in parallel.
 
-On Windows, do this inside WSL. `install.sh` performs the same steps.
+On Windows, do this inside WSL. `./install.sh` performs both this and the build below.
+
+A docker-compose setup is bundled as `docker_easy.zip`; unzip it and see the README
+inside.
 
 ### Build and run
 
@@ -161,10 +179,22 @@ Provided in `data/` for testing (and outdated). **Coverage is incomplete:**
 - Spot: 15m, 1h, 2h, 4h — **no 5m**
 - Futures: 1h, 4h, 5m — **no 2h**, and **no MATIC or XLM** at any timeframe
 
-That is why six of the twelve strategies cannot run as configured. Fresh data goes in
-`data/data/binance/<timeframe>/<COIN>-USDT.csv` (spot) or
-`data/data/futures/<COIN>_USDT-<timeframe>-futures.json` (futures); the archived
-`data_downloader_freqtrade` project downloads it via Freqtrade and Docker.
+That is why six of the twelve strategies cannot run as configured.
+
+Fresh data goes in `data/data/binance/<timeframe>/<COIN>-USDT.csv` for spot, or
+`data/data/futures/<COIN>_USDT-<timeframe>-futures.json` for futures.
+
+Spot CSVs have a header row and six columns — open time in **milliseconds** (the column
+is labelled `date`), then open, high, low, close, volume:
+
+```
+date,open,high,low,close,volume
+1502942400000,4261.48,4313.62,4261.32,4308.83,47.181009
+```
+
+Futures JSON is an array of `[open_time_ms, open, high, low, close, volume]`, and funding
+rates are `[timestamp_ms, rate]` in `<COIN>_USDT-8h-funding_rate.json`. Both are what
+Freqtrade's `download-data` produces. No downloader is bundled with this repo.
 
 ## Contributing
 

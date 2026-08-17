@@ -44,6 +44,32 @@ struct SweepConfig
     bool shuffle = true;
 };
 
+// First bar index at which every listed indicator holds a real value rather than warmup
+// padding, and at which the pair's own history has begun.
+//
+// Indicator series are left-padded with zeros through their warmup (see indicators.hh),
+// so a loop that starts too early compares prices against zeros -- which silently
+// produces trades rather than an error. Strategies traditionally hard-coded a constant
+// (600) that happened to exceed the warmups in use; this derives it instead, so raising
+// an indicator period cannot quietly outgrow it.
+//
+//   const uint ii_begin = strategy_runner::first_tradable_index({warm_ema, warm_atr},
+//                                                               start_indexes[0],
+//                                                               1); // reads [ii - 1]
+//
+// `extra_lookback` covers strategies that read backwards from the current bar.
+inline uint first_tradable_index(const std::initializer_list<size_t> indicator_warmups,
+                                 const uint data_start_index = 0,
+                                 const uint extra_lookback = 0)
+{
+    size_t worst = 0;
+    for (const size_t w : indicator_warmups)
+    {
+        worst = std::max(worst, w);
+    }
+    return std::max(static_cast<uint>(worst), data_start_index) + extra_lookback;
+}
+
 inline void init_talib()
 {
     const TA_RetCode ret = TA_Initialize();
