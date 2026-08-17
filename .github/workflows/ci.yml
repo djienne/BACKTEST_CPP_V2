@@ -10,7 +10,7 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
       - name: Install build dependencies
         run: sudo apt-get update && sudo apt-get install -y build-essential unzip nlohmann-json3-dev
@@ -25,8 +25,12 @@ jobs:
           make > /dev/null
           make install > /dev/null
 
+      # Invoked through bash rather than as ./run_regression.sh. The script is tracked
+      # executable, but a commit authored on a Windows checkout (where
+      # core.filemode=false) can silently drop the bit again -- which is exactly how this
+      # step first failed, with exit 126.
       - name: Regression gate (build + unit tests + numeric fixtures)
-        run: ./run_regression.sh
+        run: bash ./run_regression.sh
 
       # Sanitizers run against the unit suite only: it is fast and has no data-file
       # dependency, which is what makes it a usable gate on every push.
