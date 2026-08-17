@@ -64,6 +64,20 @@ On Windows, do this inside WSL. `./install.sh` performs both this and the build 
 A docker-compose setup is bundled as `docker_easy.zip`; unzip it and see the README
 inside.
 
+### Get the data
+
+The repo ships only the small slice the regression fixtures need. Everything else is
+downloaded on demand from Binance's public archive:
+
+```bash
+python3 tools/download_data.py --check    # what's missing, and which strategies it blocks
+python3 tools/download_data.py            # fetch it (stdlib only, no pip install)
+```
+
+The downloader reads the same `backtest_config.json` the strategies do, so it cannot
+fetch a different universe than they open. Re-runs are incremental — completed months are
+cached under `.data_cache/`. See [Data](#data) for formats and caveats.
+
 ### Build and run
 
 ```bash
@@ -86,28 +100,65 @@ Binaries carry an rpath to the in-tree TA-Lib, so no `LD_LIBRARY_PATH` is needed
 
 Strategies are discovered from `*.cpp` automatically — adding one needs no Makefile edit.
 
+## Configuration
+
+`backtest_config.json` is the single source of truth for the traded universe. Both the
+strategies and the downloader read it, so the data that gets fetched cannot drift from the
+data the strategies open:
+
+```jsonc
+{
+  "data_dir": "./data/data",
+  "coins": ["BTC", "ETH"],
+  "history_start": "2017-08",
+  "strategies": {
+    "BBTREND":           { "market": "spot",    "timeframe": "2h" },
+    "F_SuperReversal_mtf": { "market": "futures", "timeframe": "5m", "htf": "1h" }
+  }
+}
+```
+
+Keys are each binary's `STRAT_NAME` constant, **not** its file name. A strategy with no
+entry aborts at startup rather than guessing a universe nobody downloaded. Override the
+file location with `BACKTEST_CONFIG=/path/to/config.json`.
+
+Changing `coins` changes every strategy at once. The count is a runtime value;
+`backtest_config::MAX_PAIRS` (16) is only the compile-time ceiling that keeps the
+per-pair arrays fixed-size, so raising the universe past 16 means bumping that constant
+and rebuilding.
+
+**Symbols must exist on both Binance spot and USDT-M futures.** Three that earlier
+versions of this repo referenced no longer do, so no data can be downloaded for them:
+
+| Symbol | Status |
+| --- | --- |
+| MATIC | Swapped to POL 2024-09; USDT-M perpetual settled and delisted. POL has no USDT-M perpetual either. |
+| XMR | Delisted from Binance entirely 2024-02-20 — spot, margin and futures. |
+| EOS | No `EOSUSDT` USDT-M perpetual. |
+
 ## Strategies
 
-Whether a strategy runs depends on the bundled data, which is incomplete (see
-[Data](#data)).
+All of them trade the configured `coins` on the timeframe their config entry names.
 
-| Strategy | Market | Timeframe | Indicators | Runs on bundled data |
-| --- | --- | --- | --- | :---: |
-| `backtest_double_EMA_float` | spot | 1h | 2 EMAs | yes |
-| `backtest_double_EMA_StochRSI_float_muti_pair` | spot | 1h | 2 EMAs + StochRSI | yes |
-| `BigWill` | spot | 1h | Williams %R, EMAs, Awesome Oscillator | yes |
-| `backtest_TRIX_multi_pair` | spot | 1h | TRIX, EMA, StochRSI | yes |
-| `BBTREND` | spot | 2h | Bollinger breakout + EMA | yes |
-| `SuperTrend_EMA_ATR` | spot | 4h | SuperTrend, EMA, ATR | yes |
-| `3EMA_SRSI_ATR` | spot | 5m | 3 EMAs, StochRSI, ATR | no — no 5m spot data |
-| `SuperReversal_mtf` | spot | 5m/1h | SuperTrend + EMAs, multi-timeframe | no — no 5m spot data |
-| `F_BigWill` | futures | 1h | as `BigWill`, long + short | no — no MATIC/XLM futures |
-| `F_BBTREND` | futures | 2h | as `BBTREND`, long + short | no — no 2h futures data |
-| `F_SuperReversal_mtf` | futures | 5m/1h | as `SuperReversal_mtf` | no — no MATIC/XLM futures |
-| `F_3EMA_SRSI_ATR` | futures | 5m | as `3EMA_SRSI_ATR`, long + short | no — no MATIC/XLM futures |
+| Strategy | Market | Timeframe | Indicators |
+| --- | --- | --- | --- |
+| `backtest_double_EMA_float` | spot | 1h | 2 EMAs (single asset) |
+| `backtest_double_EMA_StochRSI_float_muti_pair` | spot | 1h | 2 EMAs + StochRSI |
+| `BigWill` | spot | 1h | Williams %R, EMAs, Awesome Oscillator |
+| `backtest_TRIX_multi_pair` | spot | 1h | TRIX, EMA, StochRSI |
+| `BBTREND` | spot | 2h | Bollinger breakout + EMA |
+| `SuperTrend_EMA_ATR` | spot | 4h | SuperTrend, EMA, ATR |
+| `3EMA_SRSI_ATR` | spot | 5m | 3 EMAs, StochRSI, ATR |
+| `SuperReversal_mtf` | spot | 5m/1h | SuperTrend + EMAs, multi-timeframe |
+| `F_BigWill` | futures | 1h | as `BigWill`, long + short |
+| `F_BBTREND` | futures | 2h | as `BBTREND`, long + short |
+| `F_SuperReversal_mtf` | futures | 5m/1h | as `SuperReversal_mtf` |
+| `F_3EMA_SRSI_ATR` | futures | 5m | as `3EMA_SRSI_ATR`, long + short |
+
+`python3 tools/download_data.py --check` reports which of them currently have their data.
 
 `STRATEGY_TEMPLATE.cpp` is a complete, working RSI/EMA example to copy when adding your
-own — it runs against the bundled data in about two seconds.
+own — it runs in about two seconds.
 
 ### Futures model
 
@@ -174,12 +225,30 @@ A fixture change means a real result change: explain it in the commit message.
 
 ## Data
 
-Provided in `data/` for testing (and outdated). **Coverage is incomplete:**
+`data/` holds only the slice the regression fixtures are computed from — four files,
+about 7.5 MB. Everything else is downloaded:
 
-- Spot: 15m, 1h, 2h, 4h — **no 5m**
-- Futures: 1h, 4h, 5m — **no 2h**, and **no MATIC or XLM** at any timeframe
+```bash
+python3 tools/download_data.py --check                       # coverage report
+python3 tools/download_data.py                               # fetch what's missing
+python3 tools/download_data.py --coins BTC --timeframes 5m   # a subset
+python3 tools/download_data.py --start 2021-01 --jobs 8      # narrower history, faster
+```
 
-That is why six of the twelve strategies cannot run as configured.
+It pulls Binance's public monthly archives (`data.binance.vision`) rather than the REST
+API, so there is no pagination or rate limiting, and it verifies the SHA256 checksum that
+ships beside each file. Downloads are cached under `.data_cache/`; both that and the
+downloaded datasets are gitignored.
+
+Two things worth knowing:
+
+- **Binance restates historical spot klines.** Re-downloading BTC 1h reproduces 50,960 of
+  50,976 rows exactly, but 16 differ — 5 of them in `close`. Futures klines and funding
+  rates matched exactly. The four files the fixtures depend on are therefore pinned:
+  `--force` skips them unless you also pass `--force-fixtures`, which will move
+  `regression_expected/` and needs a deliberate rebaseline.
+- **The archive timestamp unit changed.** Files from 2025-01 onward use microseconds
+  where earlier ones use milliseconds; the downloader normalizes both to milliseconds.
 
 Fresh data goes in `data/data/binance/<timeframe>/<COIN>-USDT.csv` for spot, or
 `data/data/futures/<COIN>_USDT-<timeframe>-futures.json` for futures.

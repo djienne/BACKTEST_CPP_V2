@@ -47,12 +47,18 @@ struct PortfolioState
     double total_fees_paid_usdt = 0.0;
     double max_drawdown = 0.0;
     uint active_positions = 0;
+    // Pairs actually traded. N is a compile-time ceiling (backtest_config::MAX_PAIRS) so
+    // the arrays stay fixed-size and the hot loop allocation-free; the real count comes
+    // from the config at runtime. Slots [nb_pairs, N) are never touched.
+    uint nb_pairs = N;
     std::array<double, N> price_position_open{};
     std::array<double, N> coin_amounts{};
 
-    explicit PortfolioState(const double initial_usdt)
-        : usdt_amount(initial_usdt), max_wallet_val_usdt(initial_usdt), wallet_val_usdt(initial_usdt)
+    explicit PortfolioState(const double initial_usdt, const uint active_pairs = N)
+        : usdt_amount(initial_usdt), max_wallet_val_usdt(initial_usdt), wallet_val_usdt(initial_usdt),
+          nb_pairs(active_pairs)
     {
+        assert(active_pairs <= N);
         price_position_open.fill(0.0);
         coin_amounts.fill(0.0);
     }
@@ -65,7 +71,7 @@ void populate_common_result(RUN_RESULTf &result, const ResultMetrics &metrics, c
 template <size_t N>
 double calculate_spot_wallet_val_usdt(const PortfolioState<N> &state, const std::array<float, N> &current_prices)
 {
-    return state.usdt_amount + vector_product<N>(state.coin_amounts, current_prices);
+    return state.usdt_amount + vector_product<N>(state.coin_amounts, current_prices, state.nb_pairs);
 }
 
 template <size_t N>
@@ -78,7 +84,7 @@ void record_spot_snapshot(PortfolioState<N> &state, WalletTrace &trace, const st
 template <size_t N>
 void record_futures_snapshot(PortfolioState<N> &state, WalletTrace &trace, const std::array<float, N> &current_prices, const int64_t timestamp)
 {
-    state.wallet_val_usdt = calculate_wallet_val_usdt<N>(state.usdt_amount, state.coin_amounts, current_prices, state.price_position_open);
+    state.wallet_val_usdt = calculate_wallet_val_usdt<N>(state.usdt_amount, state.coin_amounts, current_prices, state.price_position_open, state.nb_pairs);
     record_wallet_snapshot(state.wallet_val_usdt, timestamp, state.max_wallet_val_usdt, state.max_drawdown, trace);
 }
 

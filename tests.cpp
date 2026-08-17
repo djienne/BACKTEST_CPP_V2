@@ -668,6 +668,49 @@ void test_random_number_generator_seeding()
     REQUIRE(c.getRandomNumber(0) == 0);
 }
 
+void test_strategy_param_structs_are_fully_initialized()
+{
+    // Regression for the bug that stopped 3EMA_SRSI_ATR opening any position at all:
+    // EMA3_params has eight members and its initializer supplied seven, so the
+    // max-open-trades value landed in SRSIU and max_open_trades defaulted to 0 --
+    // making `active_positions < MAX_OPEN_TRADES` false on every bar.
+    //
+    // Verified here rather than by running the strategy: its sweep is 83.5 million
+    // parameter sets over 5m data, and it only prints a result block at the end.
+    const EMA3_params p{3, 50, 200, 5.0f, 5.0f, 0.2f, 0.8f, 4};
+    REQUIRE(p.ema1 == 3);
+    REQUIRE(p.ema2 == 50);
+    REQUIRE(p.ema3 == 200);
+    REQUIRE_NEAR(p.up, 5.0f, 1e-6);
+    REQUIRE_NEAR(p.down, 5.0f, 1e-6);
+    REQUIRE_NEAR(p.SRSIL, 0.2f, 1e-6);
+    REQUIRE_NEAR(p.SRSIU, 0.8f, 1e-6);
+    // The one that mattered: a zero here means the strategy cannot trade.
+    REQUIRE(p.max_open_trades == 4);
+    REQUIRE(p.max_open_trades != 0);
+
+    // A zero cap makes open_spot_long unreachable, which is exactly what the broken
+    // initializer produced. Show the guard the strategies use rejects it.
+    trade_core::PortfolioState<2> state(1000.0, 2);
+    const uint broken_cap = 0;
+    REQUIRE(!(state.active_positions < broken_cap)); // no position can ever open
+    const uint good_cap = 2;
+    REQUIRE(state.active_positions < good_cap);
+
+    // The other param structs must round-trip their members too.
+    const BigWill_params b{5, 34, 20, 200, 3};
+    REQUIRE(b.AO_fast == 5);
+    REQUIRE(b.max_open_trades == 3);
+    const trix_params t{100, 9, 21, 2};
+    REQUIRE(t.max_open_trades == 2);
+    const BBTREND_params bb{200, 20, 2.0f, 5};
+    REQUIRE(bb.max_open_trades == 5);
+    const ST_EMA_ATR_params st{100, 3.0f, 3.0f, 6};
+    REQUIRE(st.max_open_trades == 6);
+    const SR_params sr{10, 100, 4};
+    REQUIRE(sr.max_open_trades == 4);
+}
+
 void test_first_tradable_index()
 {
     // Takes the worst warmup among the indicators in use...
@@ -1202,6 +1245,7 @@ const NamedTest ALL_TESTS[] = {
     {"resample_timeframe_off_boundary_start", test_resample_timeframe_off_boundary_start},
     {"project_htf_to_ltf_has_no_lookahead", test_project_htf_to_ltf_has_no_lookahead},
     {"first_tradable_index", test_first_tradable_index},
+    {"strategy_param_structs_are_fully_initialized", test_strategy_param_structs_are_fully_initialized},
     {"random_number_generator_seeding", test_random_number_generator_seeding},
     {"record_wallet_snapshot_drawdown", test_record_wallet_snapshot_drawdown},
     {"futures_long_close_sign", test_futures_long_close_sign},

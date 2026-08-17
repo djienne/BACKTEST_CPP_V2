@@ -5,9 +5,21 @@ after_*.txt
 regen_*.txt
 .regression_tmp/
 .baseline/
+.smoke_logs/
 build/
 talib/
 python/__pycache__/
+tools/__pycache__/
+
+# Downloaded market data and the archive cache. Only the small slice the regression
+# fixtures are computed from stays tracked (see the exceptions below) -- everything else
+# comes from `python3 tools/download_data.py`.
+.data_cache/
+data/data/**
+!data/data/binance/1h/BTC-USDT.csv
+!data/data/binance/1h/ETH-USDT.csv
+!data/data/futures/BTC_USDT-1h-futures.json
+!data/data/futures/BTC_USDT-8h-funding_rate.json
 
 # Secrets — the real .env must never be committed.
 .env

@@ -1,0 +1,43 @@
+{
+  "_comment": [
+    "Shared by the C++ strategies (config.hh) and tools/download_data.py, so the data",
+    "that gets downloaded cannot drift from the data the strategies open.",
+    "",
+    "coins: traded universe. Every strategy uses this list.",
+    "  Keep to symbols listed on BOTH Binance spot and USDT-M futures. MATIC (swapped to",
+    "  POL in 2024-09, and POL has no USDT-M perpetual), XMR (delisted 2024-02) and EOS",
+    "  are all gone from futures, so data for them cannot be downloaded at all.",
+    "",
+    "history_start: first month to download, 'YYYY-MM'. Futures contracts onboarded from",
+    "  2019-09 (BTC) onwards, so earlier months simply do not exist for them.",
+    "",
+    "strategies: keyed by each binary's STRAT_NAME constant, NOT its file name -- that is",
+    "  the string config.hh looks up. 'market' is spot or futures; 'htf' is the higher",
+    "  timeframe for multi-timeframe strategies. A strategy with no entry here aborts at",
+    "  startup rather than guessing.",
+    "",
+    "max_open_trades sweeps are clamped to the number of coins at runtime: sweeping 'up",
+    "  to 10 concurrent positions' across 2 pairs is the same backtest ten times."
+  ],
+
+  "data_dir": "./data/data",
+  "coins": ["BTC", "ETH"],
+  "history_start": "2017-08",
+
+  "strategies": {
+    "2EMA_crossover":          { "market": "spot",    "timeframe": "1h", "file": "backtest_double_EMA_float" },
+    "2EMA_crossover_StochRSI": { "market": "spot",    "timeframe": "1h", "file": "backtest_double_EMA_StochRSI_float_muti_pair" },
+    "BigWill":                 { "market": "spot",    "timeframe": "1h", "file": "BigWill" },
+    "TRIX":                    { "market": "spot",    "timeframe": "1h", "file": "backtest_TRIX_multi_pair" },
+    "BBTREND":                 { "market": "spot",    "timeframe": "2h", "file": "BBTREND" },
+    "SuperTrend_EMA_ATR":      { "market": "spot",    "timeframe": "4h", "file": "SuperTrend_EMA_ATR" },
+    "EMA3_SRSI_ATR":           { "market": "spot",    "timeframe": "5m", "file": "3EMA_SRSI_ATR" },
+    "SuperReversal_mtf":       { "market": "spot",    "timeframe": "5m", "htf": "1h", "file": "SuperReversal_mtf" },
+    "TEMPLATE_RSI_EMA":        { "market": "spot",    "timeframe": "1h", "file": "STRATEGY_TEMPLATE" },
+
+    "F_BigWill":               { "market": "futures", "timeframe": "1h", "file": "F_BigWill" },
+    "F_BBTREND":               { "market": "futures", "timeframe": "2h", "file": "F_BBTREND" },
+    "F_SuperReversal_mtf":     { "market": "futures", "timeframe": "5m", "htf": "1h", "file": "F_SuperReversal_mtf" },
+    "F_EMA3_SRSI_ATR":         { "market": "futures", "timeframe": "5m", "file": "F_3EMA_SRSI_ATR" }
+  }
+}

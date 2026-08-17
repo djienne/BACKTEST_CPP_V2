@@ -5,6 +5,7 @@
 #include <fstream>
 #include <math.h>
 #include <unordered_map>
+#include "config.hh"
 #include "tools.hh"
 #include "trade_core.hh"
 #include "custom_talib_wrapper.hh"
@@ -18,8 +19,9 @@ const string out_filename = STRAT_NAME + "_best.txt";
 const float FEE = 0.1f;                   // FEES in %
 const float USDT_amount_initial = 1000.0f;
 const double MAX_ALLOWED_DD = -40.0;
-const std::string PAIR = "BTC-USDT";
-const std::string DATAFILE = "./data/data/binance/1h/" + PAIR + ".csv";
+// Single-asset strategy: it trades the first coin in the configured list.
+std::string PAIR{};
+std::string DATAFILE{};
 
 // RANGE OF EMA PERIDOS TO TEST
 const int MIN_EMA = 3;
@@ -183,6 +185,13 @@ RUN_RESULTf PROCESS(const KLINEf &kline_data, const int ema1_v, const int ema2_v
 int main()
 {
     auto startTime = std::chrono::high_resolution_clock::now();
+
+    // Coins, market and timeframe come from backtest_config.json; load() aborts if this
+    // strategy has no entry, rather than guessing a universe nobody downloaded. This one
+    // is single-asset, so it takes the first configured coin.
+    const backtest_config::StrategyConfig CFG = backtest_config::load(STRAT_NAME);
+    PAIR = CFG.coins.front() + "-USDT";
+    DATAFILE = backtest_config::spot_paths(CFG).front();
 
     std::cout << "\n-------------------------------------" << std::endl;
     std::cout << "Strategy to test: EMA crossover simple" << std::endl;

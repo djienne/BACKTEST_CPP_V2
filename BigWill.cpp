@@ -7,6 +7,7 @@
 #include <sstream>
 #include <math.h>
 #include <unordered_map>
+#include "config.hh"
 #include "tools.hh"
 #include "trade_core.hh"
 #include "custom_talib_wrapper.hh"
@@ -18,20 +19,16 @@ using uint = unsigned int;
 const string STRAT_NAME = "BigWill";
 const string out_filename = STRAT_NAME + "_best.txt";
 
-const vector<uint> MAX_OPEN_TRADES_TO_TEST{2, 3, 4, 5, 6, 7, 8, 9, 10, 11};
-const vector<string> COINS = {"BTC",
-                              "ETH",
-                              "BNB",
-                              "XRP",
-                              "TRX",
-                              "MATIC",
-                              "LTC",
-                              "XMR",
-                              "XLM",
-                              "EOS",
-                              "ETC"};
-static const uint NB_PAIRS = 11;
-string timeframe = "1h";
+// Filled in main() as 1..NB_PAIRS: the book cannot hold more than one
+// position per pair, so larger values just repeat the same backtest.
+std::vector<uint> MAX_OPEN_TRADES_TO_TEST{};
+// Filled from backtest_config.json in main().
+std::vector<std::string> COINS{};
+// MAX_PAIRS sizes the fixed per-pair arrays; NB_PAIRS is the count actually
+// traded, filled from the config in main().
+using backtest_config::MAX_PAIRS;
+uint NB_PAIRS = 0;
+std::string timeframe{};
 vector<string> DATAFILES{};
 
 const float FEE = 0.1f;        // FEES in %
@@ -65,7 +62,7 @@ RUN_RESULTf PROCESS(vector<KLINEf> &PAIRS, const int fast, const int slow, int e
 
     trade_core::WalletTrace wallet_trace{};
     trade_core::TradeStats stats{};
-    trade_core::PortfolioState<NB_PAIRS> portfolio(USDT_amount_initial);
+    trade_core::PortfolioState<MAX_PAIRS> portfolio(USDT_amount_initial, NB_PAIRS);
 
     const uint nb_max = PAIRS[0].nb;
 
@@ -93,7 +90,7 @@ RUN_RESULTf PROCESS(vector<KLINEf> &PAIRS, const int fast, const int slow, int e
         cached_ao_key = ao_key;
     }
 
-    std::array<const std::vector<float> *, NB_PAIRS> AO{};
+    std::array<const std::vector<float> *, MAX_PAIRS> AO{};
     for (uint ic = 0; ic < NB_PAIRS; ic++)
     {
         AO[ic] = &PAIRS[ic].indicators.get(ao_key);
@@ -101,10 +98,10 @@ RUN_RESULTf PROCESS(vector<KLINEf> &PAIRS, const int fast, const int slow, int e
 
     // Hoist the per-pair series out of the bar loop. These used to be looked up through
     // a string-keyed map on every bar for every pair.
-    std::array<const std::vector<float> *, NB_PAIRS> EMA_F{};
-    std::array<const std::vector<float> *, NB_PAIRS> EMA_S{};
-    std::array<const std::vector<float> *, NB_PAIRS> SRSI{};
-    std::array<const std::vector<float> *, NB_PAIRS> WILL{};
+    std::array<const std::vector<float> *, MAX_PAIRS> EMA_F{};
+    std::array<const std::vector<float> *, MAX_PAIRS> EMA_S{};
+    std::array<const std::vector<float> *, MAX_PAIRS> SRSI{};
+    std::array<const std::vector<float> *, MAX_PAIRS> WILL{};
     const std::string emaf_key = IndicatorCache::key("EMA", ema_fast);
     const std::string emas_key = IndicatorCache::key("EMA", ema_slow);
     const std::string srsi_key = IndicatorCache::key("STOCHRSI", 14, 14);
@@ -166,7 +163,7 @@ RUN_RESULTf PROCESS(vector<KLINEf> &PAIRS, const int fast, const int slow, int e
         // check wallet status
         if (closed || LAST_ITERATION)
         {
-            array<float, NB_PAIRS> closes{};
+            array<float, MAX_PAIRS> closes{};
             for (uint ic = 0; ic < NB_PAIRS; ic++)
                 closes[ic] = PAIRS[ic].close[ii];
 
@@ -174,7 +171,7 @@ RUN_RESULTf PROCESS(vector<KLINEf> &PAIRS, const int fast, const int slow, int e
         }
     }
 
-    array<float, NB_PAIRS> last_closes{};
+    array<float, MAX_PAIRS> last_closes{};
     for (uint ic = 0; ic < NB_PAIRS; ic++)
         last_closes[ic] = PAIRS[ic].close[nb_max - 1];
 
@@ -236,8 +233,20 @@ int main()
     const double t_begin = get_wall_time();
     strategy_runner::init_talib();
 
-    // Shared path helper rather than a per-strategy copy of the same loop.
-    DATAFILES = strategy_runner::build_spot_datafile_paths(COINS, timeframe);
+    // Coins, market and timeframe come from backtest_config.json; load() aborts if this
+    // strategy has no entry, rather than guessing a universe nobody downloaded.
+    const backtest_config::StrategyConfig CFG = backtest_config::load(STRAT_NAME);
+    NB_PAIRS = CFG.nb_pairs();
+    COINS = CFG.coins;
+    timeframe = CFG.timeframe;
+    backtest_config::print_summary(CFG);
+
+    for (uint n = 1; n <= NB_PAIRS; ++n)
+    {
+        MAX_OPEN_TRADES_TO_TEST.push_back(n);
+    }
+
+    DATAFILES = backtest_config::spot_paths(CFG);
 
     vector<KLINEf> PAIRS;
     PAIRS.reserve(NB_PAIRS);

@@ -81,6 +81,34 @@ Copy `STRATEGY_TEMPLATE.cpp`. `make` discovers `*.cpp` in the repo root automati
 there is no list to update — `make MyStrategy` and `make MyStrategy.exe` both work
 immediately, and `run_regression.sh` compiles it because it runs `make all`.
 
+**Add a `backtest_config.json` entry first**, keyed by your `STRAT_NAME` constant (not the
+file name). Without one the binary aborts at startup, deliberately: a strategy that
+guesses its own market and timeframe is how this repo ended up shipping binaries that
+read files nobody downloads. Then:
+
+```bash
+python3 tools/download_data.py --check   # confirms your entry's data exists
+python3 tools/download_data.py           # fetches it if not
+```
+
+### Pair count is a runtime value
+
+`backtest_config::MAX_PAIRS` (16) is a compile-time ceiling used only to size the
+fixed-length per-pair arrays — `PortfolioState<MAX_PAIRS>`, `std::array<float,
+MAX_PAIRS>`. The number actually traded is the runtime `NB_PAIRS`, filled from the config
+in `main()`. So:
+
+- size arrays and template arguments with `MAX_PAIRS`
+- bound every loop with `NB_PAIRS`
+- construct the portfolio as `PortfolioState<MAX_PAIRS> portfolio(initial, NB_PAIRS)`
+
+They are fixed-size rather than `std::vector` on purpose: `PROCESS` runs millions of times
+per sweep and a heap allocation there would dominate.
+
+Anything derived from the pair count must be computed **after** the config load, not at
+declaration time — filling a `max_open_trades` sweep before `NB_PAIRS` was set left it
+empty and made `F_BigWill` run zero backtests while still reporting success.
+
 The shape of a strategy is three functions:
 
 - **`CALCULATE_INDICATORS`** — compute everything the sweep does *not* vary, once, into
@@ -159,8 +187,25 @@ edit with no explanation is the one thing that will get a change sent back.
 
 ## Data
 
-The bundled dataset does not cover every strategy. Spot has 15m/1h/2h/4h (no 5m); futures
-has 1h/4h/5m (no 2h) and lacks MATIC and XLM entirely. Six of the twelve strategies
-therefore cannot run as configured — see the table in `README.md`. Fresh data goes in
-`data/data/binance/<timeframe>/<COIN>-USDT.csv` (spot) or
-`data/data/futures/<COIN>_USDT-<timeframe>-futures.json` (futures).
+Only the slice the regression fixtures are computed from is committed (four files, ~7.5
+MB). Everything else comes from `tools/download_data.py`, which reads the same
+`backtest_config.json` the strategies do.
+
+```bash
+python3 tools/download_data.py --check                    # coverage + what it blocks
+python3 tools/download_data.py                            # fetch missing series
+python3 -m unittest discover -s tools -p 'test_*.py'      # downloader tests (no network)
+```
+
+Two traps worth knowing about, both covered by tests:
+
+- **Binance restates historical spot klines.** Re-downloading BTC 1h reproduces all but
+  16 of 50,976 rows, and 5 of those differ in `close`. The four fixture files are pinned;
+  `--force` skips them unless `--force-fixtures` is given, because rebuilding them moves
+  `regression_expected/`.
+- **Archive timestamps switched from milliseconds to microseconds in 2025-01.** Mixing
+  the two sorts a series wrongly and produced dates in the year 58595; `normalize_ms()`
+  handles it.
+
+Symbols must exist on both Binance spot and USDT-M futures. MATIC (now POL, which has no
+perpetual), XMR and EOS do not, so no data can be fetched for them.

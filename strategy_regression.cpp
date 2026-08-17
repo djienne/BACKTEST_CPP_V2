@@ -12,6 +12,9 @@ using uint = unsigned int;
 namespace
 {
 static const uint NB_PAIRS = 2;
+// Pinned harness: deliberately independent of backtest_config.json so the
+// tracked fixture cannot move when the traded universe is reconfigured.
+static const uint MAX_PAIRS = 2;
 const vector<string> DATAFILES = {
     "./data/data/binance/1h/BTC-USDT.csv",
     "./data/data/binance/1h/ETH-USDT.csv",
@@ -34,8 +37,8 @@ trade_core::ResultMetrics run_multi_pair_case()
 
     const vector<uint> start_indexes = INITIALIZE_DATA(pairs);
 
-    array<unordered_map<string, vector<float>>, NB_PAIRS> ema_lists{};
-    array<vector<float>, NB_PAIRS> stoch_rsi{};
+    array<unordered_map<string, vector<float>>, MAX_PAIRS> ema_lists{};
+    array<vector<float>, MAX_PAIRS> stoch_rsi{};
     for (uint ic = 0; ic < NB_PAIRS; ++ic)
     {
         ema_lists[ic]["EMA_" + std::to_string(EMA_SHORT)] = TALIB_EMA(pairs[ic].close, EMA_SHORT);
@@ -45,7 +48,7 @@ trade_core::ResultMetrics run_multi_pair_case()
 
     trade_core::WalletTrace wallet_trace{};
     trade_core::TradeStats stats{};
-    trade_core::PortfolioState<NB_PAIRS> portfolio(USDT_amount_initial);
+    trade_core::PortfolioState<MAX_PAIRS> portfolio(USDT_amount_initial);
 
     const uint nb_max = pairs[0].nb;
     const uint ii_begin = start_indexes[0];
@@ -81,7 +84,7 @@ trade_core::ResultMetrics run_multi_pair_case()
 
         if (closed || last_iteration)
         {
-            array<float, NB_PAIRS> closes{};
+            array<float, MAX_PAIRS> closes{};
             for (uint ic = 0; ic < NB_PAIRS; ++ic)
             {
                 closes[ic] = pairs[ic].close[ii];
@@ -91,7 +94,7 @@ trade_core::ResultMetrics run_multi_pair_case()
         }
     }
 
-    array<float, NB_PAIRS> last_closes{};
+    array<float, MAX_PAIRS> last_closes{};
     for (uint ic = 0; ic < NB_PAIRS; ++ic)
     {
         last_closes[ic] = pairs[ic].close[nb_max - 1];

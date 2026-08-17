@@ -7,6 +7,7 @@
 #include <sstream>
 #include <math.h>
 #include <unordered_map>
+#include "config.hh"
 #include "tools.hh"
 #include "trade_core.hh"
 #include "custom_talib_wrapper.hh"
@@ -18,11 +19,16 @@ using uint = unsigned int;
 const string STRAT_NAME = "BBTREND";
 const std::string out_filename = STRAT_NAME + "_best.txt";
 
-static const uint NB_PAIRS = 11;
-const vector<string> COINS = {"BTC", "ETH", "BNB", "XRP", "TRX", "MATIC", "LTC", "XMR", "XLM", "EOS", "ETC"};
-const vector<uint> MAX_OPEN_TRADES_TO_TEST{5, 6, 7, 8, 9, 10};
-const string timeframe = "2h";
-
+// MAX_PAIRS sizes the fixed per-pair arrays; NB_PAIRS is the count actually
+// traded, filled from the config in main().
+using backtest_config::MAX_PAIRS;
+uint NB_PAIRS = 0;
+// Filled from backtest_config.json in main().
+std::vector<std::string> COINS{};
+// Filled in main() as 1..NB_PAIRS: the book cannot hold more than one
+// position per pair, so larger values just repeat the same backtest.
+std::vector<uint> MAX_OPEN_TRADES_TO_TEST{};
+std::string timeframe{};
 vector<string> DATAFILES = {};
 
 const float FEE = 0.1f;        // FEES in %
@@ -38,22 +44,15 @@ const vector<int> range_EMA = integer_range(5, period_max_EMA + 2, 5);
 const vector<int> range_BBlength = integer_range(5, 250, 5);
 const vector<float> range_BBstd = float_Nvalues_range(0.25, 4.5, 10);
 //////////////////////////
-array<std::unordered_map<string, vector<float>>, NB_PAIRS> EMA_LISTS{};
-array<vector<float>, NB_PAIRS> BollB_U{};
-array<vector<float>, NB_PAIRS> BollB_M{};
-array<vector<float>, NB_PAIRS> BollB_L{};
+array<std::unordered_map<string, vector<float>>, MAX_PAIRS> EMA_LISTS{};
+array<vector<float>, MAX_PAIRS> BollB_U{};
+array<vector<float>, MAX_PAIRS> BollB_M{};
+array<vector<float>, MAX_PAIRS> BollB_L{};
 
 uint nb_tested = 0;
 
 //////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 
-void fill_datafile_paths()
-{
-    for (uint i = 0; i < COINS.size(); i++)
-    {
-        DATAFILES.push_back("./data/data/binance/" + timeframe + "/" + COINS[i] + "-USDT.csv");
-    }
-}
 
 //////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 
@@ -69,8 +68,8 @@ RUN_RESULTf PROCESS(const vector<KLINEf> &PAIRS, const int &ema_v, const int &BB
     RUN_RESULTf result{};
     trade_core::WalletTrace wallet_trace{};
     trade_core::TradeStats stats{};
-    trade_core::PortfolioState<NB_PAIRS> portfolio(USDT_amount_initial);
-    array<float, NB_PAIRS> TSL_max_price_increase{};
+    trade_core::PortfolioState<MAX_PAIRS> portfolio(USDT_amount_initial, NB_PAIRS);
+    array<float, MAX_PAIRS> TSL_max_price_increase{};
     TSL_max_price_increase.fill(0.0f);
 
     const uint nb_max = PAIRS[0].nb;
@@ -136,7 +135,7 @@ RUN_RESULTf PROCESS(const vector<KLINEf> &PAIRS, const int &ema_v, const int &BB
         // check wallet status
         if (closed || LAST_ITERATION)
         {
-            array<float, NB_PAIRS> closes{};
+            array<float, MAX_PAIRS> closes{};
             for (uint ic = 0; ic < NB_PAIRS; ic++)
             {
                 closes[ic] = PAIRS[ic].close[ii];
@@ -146,7 +145,7 @@ RUN_RESULTf PROCESS(const vector<KLINEf> &PAIRS, const int &ema_v, const int &BB
         }
     }
 
-    array<float, NB_PAIRS> last_closes{};
+    array<float, MAX_PAIRS> last_closes{};
     for (uint ic = 0; ic < NB_PAIRS; ic++)
     {
         last_closes[ic] = PAIRS[ic].close[nb_max - 1];
@@ -189,7 +188,20 @@ int main()
     const double t_begin = get_wall_time();
     strategy_runner::init_talib();
 
-    fill_datafile_paths();
+    // Coins, market and timeframe come from backtest_config.json; load() aborts if this
+    // strategy has no entry, rather than guessing a universe nobody downloaded.
+    const backtest_config::StrategyConfig CFG = backtest_config::load(STRAT_NAME);
+    NB_PAIRS = CFG.nb_pairs();
+    COINS = CFG.coins;
+    timeframe = CFG.timeframe;
+    backtest_config::print_summary(CFG);
+
+    for (uint n = 1; n <= NB_PAIRS; ++n)
+    {
+        MAX_OPEN_TRADES_TO_TEST.push_back(n);
+    }
+
+    DATAFILES = backtest_config::spot_paths(CFG);
 
     vector<KLINEf> PAIRS;
     PAIRS.reserve(NB_PAIRS);

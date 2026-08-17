@@ -7,6 +7,7 @@
 #include <sstream>
 #include <math.h>
 #include <unordered_map>
+#include "config.hh"
 #include "tools.hh"
 #include "trade_core.hh"
 #include "custom_talib_wrapper.hh"
@@ -18,22 +19,16 @@ using uint = unsigned int;
 const string STRAT_NAME = "TRIX";
 const string out_filename = STRAT_NAME + "_best.txt";
 
-static const uint NB_PAIRS = 11;
-const vector<uint> MAX_OPEN_TRADES_TO_TEST{1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12};
-const vector<string> COINS = {"BTC",
-                              "ETH",
-                              "BNB",
-                              "XRP",
-                              "TRX",
-                              "MATIC",
-                              "LTC",
-                              "XMR",
-                              "XLM",
-                              "EOS",
-                              "ETC"};
-
-const string timeframe = "1h";
-
+// MAX_PAIRS sizes the fixed per-pair arrays; NB_PAIRS is the count actually
+// traded, filled from the config in main().
+using backtest_config::MAX_PAIRS;
+uint NB_PAIRS = 0;
+// Filled in main() as 1..NB_PAIRS: the book cannot hold more than one
+// position per pair, so larger values just repeat the same backtest.
+std::vector<uint> MAX_OPEN_TRADES_TO_TEST{};
+// Filled from backtest_config.json in main().
+std::vector<std::string> COINS{};
+std::string timeframe{};
 vector<string> DATAFILES = {};
 
 const float FEE = 0.1f;        // FEES in %
@@ -51,20 +46,13 @@ const vector<int> range_EMA = integer_range(40, period_max_EMA + 2, 3); // best 
 const vector<int> range_trixLength = integer_range(2, 100, 2);
 const vector<int> range_trixSignal = integer_range(10, 100, 2);
 //////////////////////////
-array<std::unordered_map<string, vector<float>>, NB_PAIRS> EMA_LISTS{};
-array<vector<float>, NB_PAIRS> StochRSI_LISTS{};
+array<std::unordered_map<string, vector<float>>, MAX_PAIRS> EMA_LISTS{};
+array<vector<float>, MAX_PAIRS> StochRSI_LISTS{};
 
 uint nb_tested = 0;
 
 //////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 
-void fill_datafile_paths()
-{
-    for (uint i = 0; i < COINS.size(); i++)
-    {
-        DATAFILES.push_back("./data/data/binance/" + timeframe + "/" + COINS[i] + "-USDT.csv");
-    }
-}
 
 //////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 
@@ -76,9 +64,9 @@ RUN_RESULTf PROCESS(const vector<KLINEf> &PAIRS, const int ema_v, const int trix
 
     trade_core::WalletTrace wallet_trace{};
     trade_core::TradeStats stats{};
-    trade_core::PortfolioState<NB_PAIRS> portfolio(USDT_amount_initial);
+    trade_core::PortfolioState<MAX_PAIRS> portfolio(USDT_amount_initial, NB_PAIRS);
 
-    array<vector<float>, NB_PAIRS> TRIX_HISTO{};
+    array<vector<float>, MAX_PAIRS> TRIX_HISTO{};
 
     for (uint ic = 0; ic < NB_PAIRS; ic++)
     {
@@ -129,7 +117,7 @@ RUN_RESULTf PROCESS(const vector<KLINEf> &PAIRS, const int ema_v, const int trix
         // check wallet status
         if (closed || LAST_ITERATION)
         {
-            array<float, NB_PAIRS> closes{};
+            array<float, MAX_PAIRS> closes{};
             for (uint ic = 0; ic < NB_PAIRS; ic++)
                 closes[ic] = PAIRS[ic].close[ii];
 
@@ -137,7 +125,7 @@ RUN_RESULTf PROCESS(const vector<KLINEf> &PAIRS, const int ema_v, const int trix
         }
     }
 
-    array<float, NB_PAIRS> last_closes{};
+    array<float, MAX_PAIRS> last_closes{};
     for (uint ic = 0; ic < NB_PAIRS; ic++)
     {
         last_closes[ic] = PAIRS[ic].close[nb_max - 1];
@@ -182,7 +170,20 @@ int main()
     const double t_begin = get_wall_time();
     strategy_runner::init_talib();
 
-    fill_datafile_paths();
+    // Coins, market and timeframe come from backtest_config.json; load() aborts if this
+    // strategy has no entry, rather than guessing a universe nobody downloaded.
+    const backtest_config::StrategyConfig CFG = backtest_config::load(STRAT_NAME);
+    NB_PAIRS = CFG.nb_pairs();
+    COINS = CFG.coins;
+    timeframe = CFG.timeframe;
+    backtest_config::print_summary(CFG);
+
+    for (uint n = 1; n <= NB_PAIRS; ++n)
+    {
+        MAX_OPEN_TRADES_TO_TEST.push_back(n);
+    }
+
+    DATAFILES = backtest_config::spot_paths(CFG);
 
     vector<KLINEf> PAIRS;
     PAIRS.reserve(NB_PAIRS);

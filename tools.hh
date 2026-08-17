@@ -122,11 +122,15 @@ struct BBTREND_params
 
 // Position sizes accumulate in double while prices stay float, so the dot product is
 // accumulated in double.
+//
+// `count` is the number of pairs actually traded. The arrays are sized to a compile-time
+// ceiling (backtest_config::MAX_PAIRS) so the hot loop stays allocation-free, and the
+// unused tail is skipped rather than multiplied by zero.
 template <size_t N>
-double vector_product(const std::array<double, N> &vec, const std::array<float, N> &vec2)
+double vector_product(const std::array<double, N> &vec, const std::array<float, N> &vec2, const size_t count = N)
 {
     double out = 0.0;
-    for (size_t i = 0; i < vec.size(); i++)
+    for (size_t i = 0; i < count && i < vec.size(); i++)
     {
         out += vec[i] * static_cast<double>(vec2[i]);
     }
@@ -291,11 +295,11 @@ float get_funding_fee_if_any(const fundings &FUND, const int64_t current_timesta
 // (2 * entry - price), which is exact at leverage 1 and has no liquidation model --
 // see the note on the short helpers in trade_core.hh.
 template <size_t N>
-double calculate_wallet_val_usdt(const double USDT_amount, const std::array<double, N> &COIN_AMOUNTS, const std::array<float, N> &current_prices, const std::array<double, N> &prices_position_open)
+double calculate_wallet_val_usdt(const double USDT_amount, const std::array<double, N> &COIN_AMOUNTS, const std::array<float, N> &current_prices, const std::array<double, N> &prices_position_open, const size_t count = N)
 {
     double VAL = USDT_amount;
 
-    for (size_t ic = 0; ic < COIN_AMOUNTS.size(); ic++)
+    for (size_t ic = 0; ic < count && ic < COIN_AMOUNTS.size(); ic++)
     {
         if (COIN_AMOUNTS[ic] > 0.0)
         {

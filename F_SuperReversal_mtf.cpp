@@ -7,6 +7,7 @@
 #include <sstream>
 #include <math.h>
 #include <unordered_map>
+#include "config.hh"
 #include "tools.hh"
 #include "trade_core.hh"
 #include "custom_talib_wrapper.hh"
@@ -17,25 +18,21 @@ using uint = unsigned int;
 const std::string STRAT_NAME = "F_SuperReversal_mtf";
 const std::string out_filename = STRAT_NAME + "_best.txt";
 
-const std::vector<uint> MAX_OPEN_TRADES_TO_TEST{4, 5, 6, 7, 8, 9, 10, 11, 12};
-const std::vector<string> COINS = {"BTC",
-                                   "ETH",
-                                   "BNB",
-                                   "XRP",
-                                   "TRX",
-                                   "MATIC",
-                                   "LTC",
-                                   "XMR",
-                                   "XLM",
-                                   "EOS",
-                                   "ETC"};
-static const uint NB_PAIRS = 11;
+// Filled in main() as 1..NB_PAIRS: the book cannot hold more than one
+// position per pair, so larger values just repeat the same backtest.
+std::vector<uint> MAX_OPEN_TRADES_TO_TEST{};
+// Filled from backtest_config.json in main().
+std::vector<std::string> COINS{};
+// MAX_PAIRS sizes the fixed per-pair arrays; NB_PAIRS is the count actually
+// traded, filled from the config in main().
+using backtest_config::MAX_PAIRS;
+uint NB_PAIRS = 0;
 const bool CAN_SHORT = true;
 const float ST_mult = 5.5;
 const int ST_ATRper = 10;
 
 const std::string timeframe_1 = "1h";
-const std::string timeframe = "5m";
+std::string timeframe{};
 const int int_htf = 60; // minutes
 const int int_ltf = 5;  // minutes
 
@@ -93,7 +90,7 @@ RUN_RESULTf PROCESS(const vector<KLINEf> &df, const std::vector<fundings> &FUNDI
     wallet_trace.wallet_values.reserve(2000);
     wallet_trace.timestamps.reserve(2000);
     trade_core::TradeStats stats{};
-    trade_core::PortfolioState<NB_PAIRS> portfolio(USDT_amount_initial);
+    trade_core::PortfolioState<MAX_PAIRS> portfolio(USDT_amount_initial, NB_PAIRS);
 
     const uint nb_max = df[0].close.size();
 
@@ -105,9 +102,9 @@ RUN_RESULTf PROCESS(const vector<KLINEf> &df, const std::vector<fundings> &FUNDI
 
     // Hoisted out of the bar loop: these were re-indexed through a 1000-slot array on
     // every bar, four to six times each.
-    std::array<const std::vector<float> *, NB_PAIRS> EMA_F{};
-    std::array<const std::vector<float> *, NB_PAIRS> EMA_S{};
-    std::array<const std::vector<float> *, NB_PAIRS> ST{};
+    std::array<const std::vector<float> *, MAX_PAIRS> EMA_F{};
+    std::array<const std::vector<float> *, MAX_PAIRS> EMA_S{};
+    std::array<const std::vector<float> *, MAX_PAIRS> ST{};
     const std::string emaf_key = IndicatorCache::key("EMA_1h", ema_f);
     const std::string emas_key = IndicatorCache::key("EMA_1h", ema_s);
     const std::string st_key = IndicatorCache::key("SUPERTREND_1h");
@@ -187,7 +184,7 @@ RUN_RESULTf PROCESS(const vector<KLINEf> &df, const std::vector<fundings> &FUNDI
         // check wallet status
         if (closed || LAST_ITERATION)
         {
-            std::array<float, NB_PAIRS> current_closes{};
+            std::array<float, MAX_PAIRS> current_closes{};
             for (uint ic = 0; ic < NB_PAIRS; ic++)
             {
                 current_closes[ic] = df[ic].close[ii];
@@ -196,13 +193,13 @@ RUN_RESULTf PROCESS(const vector<KLINEf> &df, const std::vector<fundings> &FUNDI
         }
     }
 
-    std::array<float, NB_PAIRS> last_closes{};
+    std::array<float, MAX_PAIRS> last_closes{};
     for (uint ic = 0; ic < NB_PAIRS; ic++)
     {
         last_closes[ic] = df[ic].close[nb_max - 1];
     }
 
-    const double wallet_val_usdt = calculate_wallet_val_usdt<NB_PAIRS>(portfolio.usdt_amount, portfolio.coin_amounts, last_closes, portfolio.price_position_open);
+    const double wallet_val_usdt = calculate_wallet_val_usdt<MAX_PAIRS>(portfolio.usdt_amount, portfolio.coin_amounts, last_closes, portfolio.price_position_open);
 
     const trade_core::ResultMetrics metrics = trade_core::calculate_result_metrics(wallet_val_usdt, USDT_amount_initial, portfolio.max_drawdown, stats);
 
@@ -259,7 +256,21 @@ int main()
     std::cout << "Strategy to test: " << BLUE << STRAT_NAME << RESET << endl;
     std::cout << "DATA FILES TO PROCESS: " << endl;
 
-    fill_datafile_paths_f(COINS, timeframe, DATAFILES, DATAFILES_fundings);
+    // Coins, market and timeframe come from backtest_config.json; load() aborts if this
+    // strategy has no entry, rather than guessing a universe nobody downloaded.
+    const backtest_config::StrategyConfig CFG = backtest_config::load(STRAT_NAME);
+    NB_PAIRS = CFG.nb_pairs();
+    COINS = CFG.coins;
+    timeframe = CFG.timeframe;
+    backtest_config::print_summary(CFG);
+
+    for (uint n = 1; n <= NB_PAIRS; ++n)
+    {
+        MAX_OPEN_TRADES_TO_TEST.push_back(n);
+    }
+
+    DATAFILES = backtest_config::futures_paths(CFG);
+    DATAFILES_fundings = backtest_config::funding_paths(CFG);
 
     RUN_RESULTf best{};
 

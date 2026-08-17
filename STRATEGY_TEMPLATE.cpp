@@ -18,6 +18,7 @@
 #include <string>
 #include <vector>
 
+#include "config.hh"
 #include "indicators.hh"
 #include "strategy_runner.hh"
 #include "tools.hh"
@@ -28,12 +29,16 @@ using namespace std;
 
 // --- 1. IDENTITY AND UNIVERSE ----------------------------------------------
 
+// STRAT_NAME is the key looked up in backtest_config.json -- the coins and timeframe
+// come from there, so a delisted symbol is a one-line config edit rather than an edit
+// to every strategy that traded it.
 const string STRAT_NAME = "TEMPLATE_RSI_EMA";
 const string out_filename = STRAT_NAME + "_best.txt";
 
-const vector<string> COINS = {"BTC", "ETH", "BNB"};
-static const uint NB_PAIRS = 3;
-const string timeframe = "1h";
+// Compile-time ceiling for the fixed-size per-pair arrays; the traded count below is
+// filled from the config in main(). See the note on backtest_config::MAX_PAIRS.
+using backtest_config::MAX_PAIRS;
+uint NB_PAIRS = 0;
 
 const float FEE = 0.1f;                        // per side, in %
 const double USDT_amount_initial = 1000.0;
@@ -47,7 +52,9 @@ const vector<int> range_rsi_period = integer_range(7, 29, 7);   // 7, 14, 21, 28
 const vector<int> range_ema_period = integer_range(50, 350, 50);
 const vector<float> range_rsi_buy = float_Nvalues_range(20.0f, 40.0f, 5);
 const vector<float> range_rsi_sell = float_Nvalues_range(60.0f, 80.0f, 5);
-const vector<uint> MAX_OPEN_TRADES_TO_TEST{1, 2, 3};
+// Filled in main() as 1..NB_PAIRS: sweeping more concurrent positions than there are
+// pairs just repeats the same backtest.
+vector<uint> MAX_OPEN_TRADES_TO_TEST{};
 
 struct TemplateParams
 {
@@ -108,12 +115,12 @@ RUN_RESULTf PROCESS(vector<KLINEf> &PAIRS, const TemplateParams &p)
 
     trade_core::WalletTrace wallet_trace{};
     trade_core::TradeStats stats{};
-    trade_core::PortfolioState<NB_PAIRS> portfolio(USDT_amount_initial);
+    trade_core::PortfolioState<MAX_PAIRS> portfolio(USDT_amount_initial, NB_PAIRS);
 
     // Hoist the series out of the bar loop -- get() hashes a string, so calling it
     // per bar would dominate the runtime.
-    array<const vector<float> *, NB_PAIRS> RSI{};
-    array<const vector<float> *, NB_PAIRS> EMA{};
+    array<const vector<float> *, MAX_PAIRS> RSI{};
+    array<const vector<float> *, MAX_PAIRS> EMA{};
     const string rsi_key = IndicatorCache::key("RSI", p.rsi_period);
     const string ema_key = IndicatorCache::key("EMA", p.ema_period);
     for (uint ic = 0; ic < NB_PAIRS; ic++)
@@ -166,7 +173,7 @@ RUN_RESULTf PROCESS(vector<KLINEf> &PAIRS, const TemplateParams &p)
         // drawdown and Calmar figures are computed from.
         if (closed || LAST_ITERATION)
         {
-            array<float, NB_PAIRS> closes{};
+            array<float, MAX_PAIRS> closes{};
             for (uint ic = 0; ic < NB_PAIRS; ic++)
             {
                 closes[ic] = PAIRS[ic].close[ii];
@@ -175,7 +182,7 @@ RUN_RESULTf PROCESS(vector<KLINEf> &PAIRS, const TemplateParams &p)
         }
     }
 
-    array<float, NB_PAIRS> last_closes{};
+    array<float, MAX_PAIRS> last_closes{};
     for (uint ic = 0; ic < NB_PAIRS; ic++)
     {
         last_closes[ic] = PAIRS[ic].close[nb_max - 1];
@@ -204,13 +211,25 @@ int main()
     const double t_begin = get_wall_time();
     strategy_runner::init_talib();
 
-    const vector<string> DATAFILES = strategy_runner::build_spot_datafile_paths(COINS, timeframe);
+    // Coins, market and timeframe come from backtest_config.json. load() aborts if this
+    // strategy has no entry there, rather than guessing a universe nobody downloaded.
+    const backtest_config::StrategyConfig CFG = backtest_config::load(STRAT_NAME);
+    NB_PAIRS = CFG.nb_pairs();
+    backtest_config::print_summary(CFG);
+
+    const vector<string> DATAFILES = backtest_config::data_paths(CFG);
 
     vector<KLINEf> PAIRS;
     PAIRS.reserve(NB_PAIRS);
     for (const string &dataf : DATAFILES)
     {
         PAIRS.push_back(read_input_data(dataf));
+    }
+
+    // 1..NB_PAIRS concurrent positions; more than that is the same backtest repeated.
+    for (uint n = 1; n <= NB_PAIRS; ++n)
+    {
+        MAX_OPEN_TRADES_TO_TEST.push_back(n);
     }
 
     // Aligns the pairs onto a common timestamp axis and returns each pair's start index.

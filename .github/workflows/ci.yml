@@ -29,6 +29,9 @@ jobs:
       # executable, but a commit authored on a Windows checkout (where
       # core.filemode=false) can silently drop the bit again -- which is exactly how this
       # step first failed, with exit 126.
+      #
+      # The gate needs no network: it runs against the small committed data slice, and the
+      # downloader tests exercise pure logic only.
       - name: Regression gate (build + unit tests + numeric fixtures)
         run: bash ./run_regression.sh
 

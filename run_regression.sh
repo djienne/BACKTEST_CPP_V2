@@ -71,6 +71,15 @@ echo "=== unit tests ==="
 ./tests.exe || fail "tests.exe returned non-zero"
 
 echo
+echo "=== downloader unit tests ==="
+# Pure logic only -- no network, so this is safe to gate every push on.
+if command -v python3 > /dev/null; then
+    python3 -m unittest discover -s tools -p 'test_*.py' -q || fail "downloader tests failed"
+else
+    echo "  python3 not found, skipping"
+fi
+
+echo
 echo "=== verification_regression ==="
 ./verification_regression.exe > "$TMP/verification_regression.txt"
 strip_ansi < "$TMP/verification_regression.txt" \
