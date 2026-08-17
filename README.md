@@ -59,7 +59,8 @@ cd ..
 Build TA-Lib **serially** — its own `src/tools/gen_code` target races under `make -j` and
 will fail intermittently. The backtester itself builds fine in parallel.
 
-On Windows, do this inside WSL. `./install.sh` performs both this and the build below.
+On Windows, do this inside WSL. `./install.sh` does this and the build, but not the data
+download — that is the next step.
 
 A docker-compose setup is bundled as `docker_easy.zip`; unzip it and see the README
 inside.
@@ -190,6 +191,8 @@ sets depend on it, but it means they do not match TA-Lib's own `STOCHRSI` exactl
 
 ## Architecture
 
+- `backtest_config.json` — traded universe and per-strategy market/timeframe
+- `config.*` — loads that file; shared with the downloader so the two cannot drift
 - `tools.*` — data loading, timestamp alignment, funding lookup, ranges, reporting
 - `indicators.*` — the indicator library and TA-Lib integration
 - `indicator_cache.hh` — per-pair keyed store of precomputed series
@@ -198,9 +201,19 @@ sets depend on it, but it means they do not match TA-Lib's own `STOCHRSI` exactl
 - `strategy_runner.hh` — the parameter-sweep loop, banner and result printing, score-file
   cadence
 - `Klinef.hh` — the OHLCV container plus its `IndicatorCache`
+- `tools/download_data.py` — fetches market data; `tools/smoke_all_strategies.sh` runs
+  every strategy end to end
 
 Strategy files own only their signal logic, their indicator precomputation, and their
 parameter ranges.
+
+### Exit fills are modelled at the bar close
+
+Every strategy books its exit at `close[ii]`, including exits triggered by an intrabar
+event. A stop-loss reached by the bar's low but closing higher is therefore filled at
+that higher close rather than at the stop, which flatters stop-outs on bars that recover.
+The same applies to take-profits. This is a repo-wide simplification worth knowing when
+reading results; making fills realistic would change every strategy's numbers.
 
 ## Testing
 
@@ -211,15 +224,25 @@ parameter ranges.
 
 On Windows, `powershell -File .\run_regression.ps1` wraps the same script via WSL.
 
-The gate runs the unit suite (`tests.cpp`, 230+ checks covering trade-core fee maths,
-result metrics, drawdown, ranges, the calendar helpers, and every indicator), then
-compares three harnesses against `regression_expected/`:
+The gate runs two suites and three numeric harnesses:
 
+- **`tests.exe`** — 279 checks over trade-core fee maths, result metrics, drawdown,
+  ranges, the UTC calendar helpers, every indicator, and regressions for the specific
+  bugs found in review (see the comments on each test for what it pins).
+- **`tools/test_download_data.py`** — 37 checks on the downloader's pure logic. No
+  network, so it is safe to gate every push on.
 - `verification_regression` — CSV/JSON loading, TA-Lib wrappers, alignment, funding
 - `strategy_regression` — one fixed multi-pair spot case through the shared trade core
 - `backtest_double_EMA_float` — a full 175k-point sweep, pinned to its winning parameters
 
-CI runs all of that plus ASan/UBSan and TSan builds of the unit suite.
+The three harnesses compare against `regression_expected/`, and run against the small
+committed data slice, so the gate needs no network.
+
+`tools/smoke_all_strategies.sh [seconds]` is the end-to-end companion: it launches every
+strategy in turn and reports whether each loaded its data, swept, and traded. It is not
+part of the gate — it needs the downloaded dataset and takes minutes.
+
+CI runs the gate plus ASan/UBSan and TSan builds of the unit suite.
 
 A fixture change means a real result change: explain it in the commit message.
 
@@ -278,15 +301,17 @@ BEST PARAMETER SET FOUND:
 Strategy         : TEMPLATE_RSI_EMA
 Parameters       :
   RSI: 7 ; EMA: 50
-  buy<: 30.000000 ; sell>: 60.000000
+  buy<: 35.000000 ; sell>: 60.000000
 Max Open Trades  : 2
-Gain             : 98.6643%
-Porfolio         : 1986.64$ (started with 1000$)
-Win rate         : 75.5556%
-max DD           : -11.1129%
-Gain/DDC         : 7.89175
-Score            : 596.265
-Calmar ratio     : 0.826031
-Number of trades : 180
+Gain             : 109.336%
+Porfolio         : 2093.36$ (started with 1000$)
+Win rate         : 72.9075%
+max DD           : -17.1226%
+Gain/DDC         : 5.29213
+Score            : 385.836
+Calmar ratio     : 0.476041
+Number of trades : 454
 --------------------------------------------------------------------------
 ```
+
+(`STRATEGY_TEMPLATE.exe`, BTC + ETH on 1h, 1200 backtests in under a second.)

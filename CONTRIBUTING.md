@@ -16,7 +16,16 @@ Then:
 
 ```bash
 make -j all          # every strategy, both regression drivers, the unit suite
-./run_regression.sh  # build + unit tests + the three numeric fixtures
+./run_regression.sh  # build + both unit suites + the three numeric fixtures
+```
+
+The gate runs against the small committed data slice and needs no network. To actually
+run a strategy you need the rest of the data:
+
+```bash
+python3 tools/download_data.py --check   # what's missing and which strategies it blocks
+python3 tools/download_data.py           # fetch it
+./tools/smoke_all_strategies.sh 60       # launch every strategy, check each one trades
 ```
 
 Other build modes:
