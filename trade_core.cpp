@@ -1,15 +1,6 @@
 #include "trade_core.hh"
 namespace trade_core
 {
-void record_wallet_snapshot(double value, int64_t time, double &peak, double &dd, WalletTrace &trace)
-{
-    if (!(peak > 0) || !std::isfinite(value))
-        throw std::runtime_error("Invalid equity observation");
-    peak = std::max(peak, value);
-    dd = std::min(dd, 100 * (value / peak - 1));
-    trace.wallet_values.push_back(value);
-    trace.timestamps.push_back(time);
-}
 ResultMetrics calculate_result_metrics(double final, double initial, double dd, const TradeStats &stats)
 {
     ResultMetrics m;

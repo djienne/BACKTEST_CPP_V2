@@ -196,9 +196,7 @@ time_t convertToUnixTimestamp(const std::string &dateString)
 #include <ctime>
 #include <sstream>
 
-// "YYYY-MM-DD" for two days ago, in UTC. Pairs with convertToUnixTimestamp, so both ends
-// of a max_time cutoff agree; localtime() here would have reintroduced the same
-// timezone dependence, and is not reentrant.
+// Format the UTC date two days before the current time.
 std::string getCurrentDateMinusTwoDays()
 {
     const std::chrono::system_clock::time_point now = std::chrono::system_clock::now();

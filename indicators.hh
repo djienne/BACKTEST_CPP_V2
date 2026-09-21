@@ -2,19 +2,14 @@
 // ---------------------------------------------------------------------------
 //  Technical indicator library.
 //
-//  Conventions every indicator here follows:
-//
-//   * Output length always equals input length. TA-Lib returns a compacted array
-//     starting at its lookback; the adapters scatter it back to full length and
-//     left-pad the warmup region with zeros, so series[i] lines up with candle i.
-//
-//   * The warmup length is reported, not hidden. Single-output wrappers take an
-//     optional `size_t *warmup` out-parameter; multi-output results carry a
-//     `warmup` field. series[i] is only a real value for i >= warmup -- reading
-//     earlier than that means comparing against padding, which is how a strategy
-//     silently trades on zeros. Use the readiness guard in strategy_runner::evaluate().
-//
-//   * Empty input gives empty output rather than aborting.
+//  Series outputs preserve the input length; resampling instead aggregates bars.
+//  TA-Lib adapters expand compact output and zero-pad unavailable leading values.
+//  Padding is not data: only indices at or beyond readiness may generate signals.
+//  Single-output adapters expose an optional warmup pointer; result structs carry
+//  warmup. Legacy AO, StochRSI and TRIX readiness is tracked by strategy_runner::Indicators.
+//  SuperTrend initializes its direction to +1 and seeds its first usable band from
+//  the first valid ATR. Its earlier bands/directions must also be ignored.
+//  Empty input gives empty output.
 //
 //  ADDING AN INDICATOR
 //  -------------------
@@ -147,10 +142,9 @@ std::vector<float> TALIB_AO(const std::vector<float> &high, const std::vector<fl
 //////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 //  StochRSI
 //
-//  Note: this family rounds the normalized RSI to 3 decimals before smoothing, a
-//  quirk inherited from the original implementation. It is kept because every
-//  tracked result and tuned parameter set depends on it, but it means these do not
-//  match TA-Lib's own STOCHRSI exactly.
+//  Model convention: normalized RSI is rounded to 3 decimals before smoothing.
+//  This differs from TA-Lib's STOCHRSI. Raw readiness is rsi_period+stoch_period-1;
+//  K and D add their SMA lookbacks. The runner enforces readiness for trading.
 //////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 
 std::vector<float> TALIB_STOCHRSI_K(const std::vector<float> &vals, const int nb_period_stoch, const int nb_period_rsi, const int k_period, const int d_period);
@@ -167,6 +161,8 @@ std::vector<float> TALIB_MINUS_DI(const std::vector<float> &high, const std::vec
 DirectionalResult TALIB_DMI(const std::vector<float> &high, const std::vector<float> &low, const std::vector<float> &close, const int period);
 // Parabolic SAR. acceleration/maximum are the usual 0.02 / 0.2.
 std::vector<float> TALIB_SAR(const std::vector<float> &high, const std::vector<float> &low, const double acceleration, const double maximum, size_t *warmup = nullptr);
+// Triple-EMA percent-change histogram minus its signal SMA; first usable index is
+// 3*(trixLength-1)+trixSignal. Each EMA is seeded from valid prior-stage observations.
 std::vector<float> TALIB_TRIX(const std::vector<float> &vals, const int trixLength, const int trixSignal);
 
 //////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
@@ -234,10 +230,8 @@ struct Resampled
 // candles become one high-timeframe candle (12 for 5m -> 1h).
 //
 // Aggregation starts at the first bar that actually opens a higher-timeframe period,
-// and that index is reported as `ltf_offset`. This matters: the bundled 5m futures data
-// starts at 16:55, so slicing blindly from index 0 -- which both mtf strategies did --
-// produced "hourly" candles spanning 16:55 to 17:50. A trailing partial group is
-// dropped, since an unfinished candle is not a candle.
+// reported as `ltf_offset`. Input cadence must be continuous. Leading and trailing
+// partial groups are dropped; only complete higher candles are returned.
 Resampled RESAMPLE_TIMEFRAME(const KLINEf &kline_in, const int bars_per_group, const int ltf_minutes, const int htf_minutes);
 
 // At the close of the last lower candle forming a higher candle, publish that

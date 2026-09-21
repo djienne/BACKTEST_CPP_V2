@@ -1,4 +1,4 @@
-"""Repair tests exercise real assembly and persistence; only upstream transport is substituted."""
+"""Repair tests exercise assembly and persistence with supplied upstream responses and archives."""
 import csv
 import hashlib
 import io
@@ -18,7 +18,7 @@ ROWS = [[BASE+i*STEP,100+i,102+i,99+i,101+i,10] for i in range(6)]
 def archive(rows):
     text=io.StringIO();csv.writer(text).writerows(rows)
     out=io.BytesIO()
-    with zipfile.ZipFile(out,"w") as z:z.writestr("candles.csv",text.getvalue())
+    with zipfile.ZipFile(out,"w") as z:z.writestr(zipfile.ZipInfo("candles.csv"),text.getvalue())
     return out.getvalue()
 
 class RepairTests(unittest.TestCase):

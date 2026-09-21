@@ -33,6 +33,11 @@ Run verification through Docker Compose as shown in the README. A source
 change should leave the smallest check that fails for the actual defect.
 Prefer hand-computed cash flows, units, limiting cases, causal perturbations
 and independent calculations over snapshots copied from the implementation.
+Expected numerical values should come from a separate calculation, not another
+wrapper around the same routine. Include nonzero cases so an all-zero stub fails.
+For causal tests, verify that the perturbation changes the affected output while
+leaving the earlier output unchanged. The number of passing assertions is not a
+measure of model validity.
 
 Current checks include:
 
@@ -47,8 +52,9 @@ Current checks include:
   candles, missing funding and interruption-safe writes. A repaired CSV is
   consumed by the real C++ loader.
 - `tools/test_strategy_reference.py`: the production EMA evaluator against an
-  independently written Python ledger and its Numba form, comparing individual
-  fills, equity and metrics. It does not compare one C++ wrapper to another.
+  independently written Python ledger, comparing individual fills, equity and
+  metrics. Numba parity checks compilation of that same reference; it is not
+  separate scientific evidence.
 - `tools/smoke_all_strategies.sh`: bounded, completed runs of every production
   strategy on real Binance data. It requires network access on a cold cache.
 

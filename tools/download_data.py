@@ -289,10 +289,10 @@ def archive_funding(coin, start, end):
 
 
 def ensure_funding(data, coin, start, end, offline=False):
-    """Cache a fully paginated authoritative ledger, including settlement marks.
+    """Cache paginated settlement records and marks, cross-checked with archives.
 
-    Coverage + content digest distinguish 'no event' from a deleted/missing record.
-    We do not infer an eight-hour schedule from the legacy filename.
+    Coverage and digest detect local deletions; they cannot prove upstream
+    completeness in REST-only intervals. No schedule is inferred from a filename.
     """
     path = data / "futures" / f"{coin}_USDT-funding.json"
     cached, good = None, False

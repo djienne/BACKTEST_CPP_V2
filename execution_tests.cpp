@@ -60,7 +60,7 @@ void fees()
 }
 void fills()
 {
-    auto d = market({{100, 101, 99, 100}, {110, 111, 109, 110}, {110, 125, 95, 115}, {115, 116, 114, 115}});
+    auto d = market({{100, 101, 99, 100}, {110, 116, 109, 115}, {110, 125, 95, 115}, {115, 116, 114, 115}});
     auto signal = [](uint, size_t i)
     {
         Intent s;
@@ -164,6 +164,20 @@ void funding_and_drawdown()
         true);
     near(r.max_DD, -50.05);
     near(r.WALLET_VAL_USDT, 998.001);
+    auto peak = market(
+        {{100, 101, 99, 100}, {100, 101, 99, 100}, {200, 201, 199, 200}, {100, 101, 99, 100}, {180, 181, 179, 180}});
+    auto recovered = trade_core::simulate(
+        peak, {0, 5}, false, 1,
+        [](uint, size_t i)
+        {
+        Intent s;
+        if (i == 0)
+            s.entry = 1;
+        return s;
+        },
+        true, 1000, 0);
+    near(recovered.max_DD, -50); // peak equity 2000 falls to 1000, then recovers
+    near(recovered.WALLET_VAL_USDT, 1800);
 }
 void ordering_and_insolvency()
 {
@@ -251,22 +265,23 @@ void ordering_and_insolvency()
 void causality_and_holdout()
 {
     std::vector<std::array<float, 4>> candles;
+    // Training rises from entry price 100 to 120. A fixed long beats a fixed
+    // short. The holdout later crashes, so using it for selection reverses that choice.
     for (int i = 0; i < 30; ++i)
     {
-        float p = 100 + (i % 5) * 3;
-        candles.push_back({p, p + 1, p - 1, p});
+        const float price = i < 2 ? 100 : i < 24 ? 100 + 20.0f * (i - 1) / 22 : 120 + 5.0f * (i - 23);
+        candles.push_back({price, price + 1, price - 1, price});
     }
     auto d = market(candles);
     auto evaluate =
         [](const MarketData &data, auto &, const strategy_runner::Params &p, trade_core::Window w, bool trace)
     {
         return trade_core::simulate(
-            data, w, false, 1,
-            [=](uint, size_t i)
+            data, w, true, 1,
+            [=](uint, size_t)
             {
             Intent s;
-            s.entry = i % static_cast<size_t>(p[0]) == 0;
-            s.exit_long = !s.entry;
+            s.entry = static_cast<int>(p[0]);
             return s;
             },
             trace);
@@ -274,24 +289,28 @@ void causality_and_holdout()
     backtest_config::StrategyConfig cfg;
     cfg.workers = 1;
     cfg.holdout_fraction = 0.2;
-    const std::vector<strategy_runner::Params> params{{2}, {3}, {4}};
+    const std::vector<strategy_runner::Params> params{{1}, {-1}};
     strategy_runner::Selection selection{0, -100, -1e6, 1e6};
     auto first = strategy_runner::evaluate_search(d, cfg, params, selection, evaluate);
+    require(first.at("parameters") == nlohmann::json::array({1.0}), "Rising training prices select the long");
+    near(first.at("training").at("wallet"), 1198800.0 / 1001);
     cfg.workers = 2;
     auto threaded = strategy_runner::evaluate_search(d, cfg, params, selection, evaluate);
     require(first == threaded, "Worker count must not change results or winner");
     auto future = d;
     for (size_t i = 24; i < 30; ++i)
     {
-        future.execution[0].open[i] *= 2;
-        future.execution[0].high[i] *= 2;
-        future.execution[0].low[i] *= 2;
-        future.execution[0].close[i] *= 2;
-        future.signal[0] = future.execution[0];
+        const float price = 120 - 20.0f * (i - 24);
+        future.execution[0].open[i] = future.execution[0].close[i] = price;
+        future.execution[0].high[i] = price + 1;
+        future.execution[0].low[i] = price - 1;
     }
+    future.signal[0] = future.execution[0];
     auto changed = strategy_runner::evaluate_search(future, cfg, params, selection, evaluate);
     require(first.at("parameters") == changed.at("parameters"), "Holdout must not select parameters");
     require(first.at("training") == changed.at("training"), "Future changes must not change training trades");
+    require(first.at("holdout").at("wallet") != changed.at("holdout").at("wallet"),
+            "Holdout perturbation must change actual returns");
     near(first.at("holdout").at("equity")[0], 1000);
     auto parameters =
         strategy_runner::sample(std::vector<strategy_runner::Axis>{{"period", integer_range(2, 200)}}, 100, 42,
@@ -353,6 +372,7 @@ void input_and_readiness()
     auto future_trix = TALIB_TRIX(trend, 5, 4);
     for (size_t i = 0; i < histogram.size(); ++i)
         near(future_trix[i], histogram[i]);
+    near(TALIB_TRIX({100, 100, 100, 100, 100, 100, 200}, 2, 2).back(), 400.0 / 27, 1e-4);
     TA_Shutdown();
     auto gaps = market(std::vector<std::array<float, 4>>(24, {100, 101, 99, 100}), 300);
     for (size_t i = 1; i < 24; ++i)

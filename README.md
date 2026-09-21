@@ -45,14 +45,18 @@ Every direct strategy run checks data first and tries to download missing or
 invalid candles and missing funding coverage automatically. Explicit dates are
 recommended for a repeatable study:
 
+Merge these `run` settings into the existing configuration:
+
 ```json
-"run": {
-  "start": "2024-01-01",
-  "end": "2024-04-01",
-  "max_trials": 1000,
-  "seed": 42,
-  "workers": 2,
-  "holdout_fraction": 0.2
+{
+  "run": {
+    "start": "2024-01-01",
+    "end": "2024-04-01",
+    "max_trials": 1000,
+    "seed": 42,
+    "workers": 2,
+    "holdout_fraction": 0.2
+  }
 }
 ```
 
@@ -155,7 +159,8 @@ Data sources and conventions:
 ## Search and results
 
 The default search samples 1,000 distinct valid grid combinations with seed 42.
-Workers have separate caches; ties resolve by candidate order. `max_trials: 0`
+Workers have separate caches; ties resolve by candidate order. Set `run.workers`
+for parallel evaluation; the obsolete duplicate-process launcher was removed. `max_trials: 0`
 requests exhaustive enumeration, limited to 10 million raw combinations to
 bound memory. For larger grids use a finite budget.
 
@@ -194,5 +199,8 @@ Logs are in `.smoke_logs/`; full results remain in `results/`.
 The independent EMA references accept `--datafile`, `--ema1` (slow), and
 `--ema2` (fast), using `python/backtest_double_EMA_float.py` or its
 `_numba.py` counterpart inside Compose. They evaluate fixed parameters and
-do not tune on their holdout. See [CONTRIBUTING.md](CONTRIBUTING.md) for checks
+do not tune on their holdout. These reference utilities consume already validated
+CSV data; research strategy binaries perform automatic data preparation. Numba
+compiles the same Python reference and is not a second independent model.
+See [CONTRIBUTING.md](CONTRIBUTING.md) for checks
 and code organization.

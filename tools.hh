@@ -9,8 +9,8 @@
 #include <iostream>
 #include <unistd.h>
 #include <fstream>
-#include <algorithm> // std::shuffle
-#include <random>    // std::default_random_engine
+#include <algorithm>
+#include <random>
 #include <ctime>
 #include <sstream>
 #include <regex>
@@ -85,8 +85,8 @@ std::vector<float> float_Nvalues_range(const float &vmin, const float &vmax, con
 float get_funding_fee_if_any(const fundings &FUND, const int64_t current_timestamp);
 
 // Mark-to-market value of a futures book. A short is valued as its mirrored long,
-// (2 * entry - price), which is exact at leverage 1 and has no liquidation model --
-// see the note on the short helpers in trade_core.hh.
+// abs(quantity) * (2 * entry - price), representing collateral plus short P&L.
+// This 1x accounting model does not model exchange liquidation.
 template <size_t N>
 double calculate_wallet_val_usdt(const double USDT_amount, const std::array<double, N> &COIN_AMOUNTS,
                                  const std::array<float, N> &current_prices,

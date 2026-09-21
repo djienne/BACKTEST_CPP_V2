@@ -37,6 +37,8 @@ class ReferenceTests(unittest.TestCase):
             self.assertGreater(len(fills),20)
             np.testing.assert_allclose(fills,ref["fills"],rtol=1e-12,atol=1e-8)
             np.testing.assert_allclose(actual["equity"],ref["equity"],rtol=1e-12,atol=1e-8)
+            np.testing.assert_allclose(compiled["fills"],ref["fills"],rtol=1e-12,atol=1e-8)
+            np.testing.assert_allclose(compiled["equity"],ref["equity"],rtol=1e-12,atol=1e-8)
 
 if __name__=="__main__":
     unittest.main()

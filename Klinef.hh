@@ -24,11 +24,7 @@ struct KLINEf
     std::string name;
     uint start_idx = 0;
 
-    // Precomputed indicator series for this pair, keyed by name + parameters. This
-    // replaced two fixed 1000-slot arrays indexed directly by EMA period (any period
-    // >= 1000 was silent out-of-bounds) and a list of named members that every strategy
-    // carried whether it used them or not. Adding an indicator to one strategy no
-    // longer requires editing this struct.
+    // Optional container cache. Searches keep their caches separately, per worker.
     IndicatorCache indicators;
 };
 

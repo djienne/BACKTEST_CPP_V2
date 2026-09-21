@@ -13,7 +13,8 @@ class IndicatorCache
 {
 public:
     // "EMA:200", "STOCHRSI:14:14", "SUPERTREND:10:3.000000" -- readable in a debugger
-    // and collision-free as long as the name is unique per indicator.
+    // Floating parameters use six decimals. Current grids are coarser; increase
+    // key precision before introducing steps smaller than 1e-6.
     static std::string key(const std::string &name)
     {
         return name;
@@ -75,12 +76,8 @@ public:
         }
     }
 
-    // Drop one series. Used by strategies that cache a sweep-expensive indicator
-    // lazily: they evict the previous parameter's series when the sweep moves on, so
-    // the cache stays a fixed size instead of accumulating every combination.
-    //
-    // Safe to call while holding references to *other* entries: unordered_map keeps
-    // references to surviving elements valid across erase and rehash.
+    // Targeted eviction preserves references to other entries. Normal searches
+    // use discard_unused() after each trial.
     void erase(const std::string &k)
     {
         series_by_key_.erase(k);

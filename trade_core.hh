@@ -9,11 +9,6 @@ struct TradeStats
 {
     uint nb_profit = 0, nb_loss = 0, nb_positions_entered = 0, nb_closed = 0;
 };
-struct WalletTrace
-{
-    std::vector<double> wallet_values;
-    std::vector<int64_t> timestamps;
-};
 struct ResultMetrics
 {
     double gain = 0, win_rate = 0, ddc = 0, gain_over_ddc = 0, score = 0;
@@ -31,7 +26,6 @@ template <size_t N> struct PortfolioState
             throw std::runtime_error("Invalid portfolio");
     }
 };
-void record_wallet_snapshot(double, int64_t, double &, double &, WalletTrace &);
 ResultMetrics calculate_result_metrics(double, double, double, const TradeStats &);
 void populate_common_result(RUN_RESULTf &, const ResultMetrics &, double, double, double, const TradeStats &, uint);
 std::optional<double> calmar_ratio(double initial, double final, int64_t elapsed_seconds, double max_drawdown);
@@ -49,18 +43,6 @@ template <size_t N> double equity(const PortfolioState<N> &s, const std::array<f
     if (!futures)
         return calculate_spot_wallet_val_usdt(s, prices);
     return calculate_wallet_val_usdt<N>(s.usdt_amount, s.coin_amounts, prices, s.price_position_open, s.nb_pairs);
-}
-template <size_t N>
-void record_spot_snapshot(PortfolioState<N> &s, WalletTrace &trace, const std::array<float, N> &p, int64_t t)
-{
-    s.wallet_val_usdt = equity(s, p, false);
-    record_wallet_snapshot(s.wallet_val_usdt, t, s.max_wallet_val_usdt, s.max_drawdown, trace);
-}
-template <size_t N>
-void record_futures_snapshot(PortfolioState<N> &s, WalletTrace &trace, const std::array<float, N> &p, int64_t t)
-{
-    s.wallet_val_usdt = equity(s, p, true);
-    record_wallet_snapshot(s.wallet_val_usdt, t, s.max_wallet_val_usdt, s.max_drawdown, trace);
 }
 template <size_t N>
 void open_position(PortfolioState<N> &s, TradeStats &stats, uint pair, double price, double fee_pc, uint limit,

@@ -156,7 +156,6 @@ void test_calculate_result_metrics_degenerate()
 
 void test_supertrend_known_reversal()
 {
-    TA_Initialize();
     const std::vector<float> close{100, 100, 100, 103, 97};
     const std::vector<float> high{101, 101, 101, 104, 98}, low{99, 99, 99, 102, 96};
     const auto st = TALIB_SuperTrend(high, low, close, 2, 1.0f);
@@ -166,39 +165,6 @@ void test_supertrend_known_reversal()
     REQUIRE_NEAR(st.final_lowerband[2], 98, 1e-6);
     REQUIRE_NEAR(st.final_lowerband[3], 100, 1e-6);
     REQUIRE(st.supertrend[2] == 1 && st.supertrend[3] == 1 && st.supertrend[4] == -1);
-    TA_Shutdown();
-}
-
-void test_record_wallet_snapshot_drawdown()
-{
-    trade_core::WalletTrace trace{};
-    double max_val = 1000.0;
-    double max_dd = 0.0;
-
-    // ATH at 1000
-    trade_core::record_wallet_snapshot(1000.0f, 1, max_val, max_dd, trace);
-    REQUIRE_NEAR(max_val, 1000.0f, 1e-6);
-    REQUIRE_NEAR(max_dd, 0.0f, 1e-6);
-
-    // New ATH at 2000
-    trade_core::record_wallet_snapshot(2000.0f, 2, max_val, max_dd, trace);
-    REQUIRE_NEAR(max_val, 2000.0f, 1e-6);
-    REQUIRE_NEAR(max_dd, 0.0f, 1e-6);
-
-    // Drawdown to 1500 → -25%
-    trade_core::record_wallet_snapshot(1500.0f, 3, max_val, max_dd, trace);
-    REQUIRE_NEAR(max_val, 2000.0f, 1e-6);
-    REQUIRE_NEAR(max_dd, -25.0f, 1e-3);
-
-    // Recover to 1800, dd still -25 (deeper-DD is kept)
-    trade_core::record_wallet_snapshot(1800.0f, 4, max_val, max_dd, trace);
-    REQUIRE_NEAR(max_dd, -25.0f, 1e-3);
-
-    // Crash to 1000 → -50%
-    trade_core::record_wallet_snapshot(1000.0f, 5, max_val, max_dd, trace);
-    REQUIRE_NEAR(max_dd, -50.0f, 1e-3);
-
-    REQUIRE(trace.wallet_values.size() == 5);
 }
 
 void test_futures_long_close_sign()
@@ -302,51 +268,30 @@ void test_get_funding_fee_timing()
 
 void test_talib_ema_warmup()
 {
-    TA_RetCode rc = TA_Initialize();
-    if (rc != TA_SUCCESS)
-    {
-        std::cerr << "WARN: TA-Lib init failed in tests, skipping TALIB_EMA sanity.\n";
-        return;
-    }
     std::vector<float> series;
-    series.reserve(200);
     for (int i = 0; i < 200; ++i)
-    {
-        series.push_back(100.0f + static_cast<float>(i));
-    }
-    const std::vector<float> ema = TALIB_EMA(series, 20);
-    REQUIRE(ema.size() == series.size());
-    // First 19 points are warmup zeros; last EMA should be close to the linear-trend tail.
-    REQUIRE(ema[0] == 0.0f);
-    REQUIRE(ema.back() > 200.0f);
-    REQUIRE(ema.back() < series.back());
-    TA_Shutdown();
+        series.push_back(100.0f + i);
+    size_t warm = 0;
+    const auto ema = TALIB_EMA(series, 20, &warm);
+    REQUIRE(ema.size() == 200 && warm == 19);
+    REQUIRE_NEAR(ema[18], 0, 1e-6);
+    // SMA seed is 109.5; a unit ramp then keeps its exact 9.5-bar lag.
+    REQUIRE_NEAR(ema[19], 109.5, 1e-6);
+    REQUIRE_NEAR(ema[199], 289.5, 1e-6);
 }
 
-void test_talib_bbands_shape()
+void test_talib_bbands_known_values()
 {
-    TA_Initialize();
-    std::vector<float> series;
-    series.reserve(100);
-    // Slowly drifting sine ensures non-zero std, so upper > middle > lower in steady state.
-    for (int i = 0; i < 100; ++i)
-    {
-        series.push_back(100.0f + 5.0f * std::sin(i * 0.2f) + 0.1f * i);
-    }
-    std::vector<float> u, m, l;
-    TALIB_BBANDS(series, 2.0f, 2.0f, 20, u, m, l);
-    REQUIRE(u.size() == series.size());
-    REQUIRE(m.size() == series.size());
-    REQUIRE(l.size() == series.size());
-    // Steady-state (past warmup): upper > middle > lower on this oscillating input.
-    REQUIRE(u[50] > m[50]);
-    REQUIRE(m[50] > l[50]);
-    TA_Shutdown();
+    const auto b = TALIB_BBANDS_R({1, 2, 3, 4, 5}, 2, 2, 3);
+    // Last window is [3,4,5]: mean 4, population variance 2/3.
+    REQUIRE(b.warmup == 2 && b.upper.size() == 5);
+    REQUIRE_NEAR(b.middle[4], 4, 1e-6);
+    REQUIRE_NEAR(b.upper[4], 5.63299316185545, 1e-6);
+    REQUIRE_NEAR(b.lower[4], 2.36700683814455, 1e-6);
 }
 
-void test_talib_ao_shape()
+void test_talib_ao_ramp()
 {
-    TA_Initialize();
     const int n = 80;
     std::vector<float> high, low;
     high.reserve(n);
@@ -359,40 +304,18 @@ void test_talib_ao_shape()
     }
     const std::vector<float> ao = TALIB_AO(high, low, 5, 34);
     REQUIRE(ao.size() == high.size());
-    // Monotone uptrend -> AO should be positive in the tail (fast MA above slow MA).
-    REQUIRE(ao.back() > 0.0f);
-    TA_Shutdown();
+    // Difference between 5- and 34-point averages of a unit ramp: (34-5)/2.
+    REQUIRE_NEAR(ao.back(), 14.5, 1e-6);
 }
 
-void test_talib_stochrsi_range()
+void test_talib_stochrsi_known_values()
 {
-    TA_Initialize();
-    std::vector<float> series;
-    series.reserve(200);
-    // Mean-reverting saw-tooth so StochRSI produces varied non-degenerate values.
-    for (int i = 0; i < 200; ++i)
-    {
-        series.push_back(100.0f + 10.0f * std::sin(i * 0.3f));
-    }
-    const std::vector<float> srsi = TALIB_STOCHRSI_not_averaged(series, 14, 14);
-    REQUIRE(srsi.size() == series.size());
-    int bounded = 0;
-    int saw_nonzero = 0;
-    // Sample past the warmup region; values must fall in [0, 1].
-    for (size_t i = 50; i < srsi.size(); ++i)
-    {
-        if (srsi[i] >= 0.0f && srsi[i] <= 1.0f)
-        {
-            ++bounded;
-        }
-        if (srsi[i] > 0.0f)
-        {
-            ++saw_nonzero;
-        }
-    }
-    REQUIRE(bounded == static_cast<int>(srsi.size() - 50));
-    REQUIRE(saw_nonzero > 10);
-    TA_Shutdown();
+    const auto raw = TALIB_STOCHRSI_not_averaged({100, 101, 100, 102, 100, 103, 100}, 3, 2);
+    // Wilder RSI at indices 3,4,5 is 83.333333,35.714286,76.315789.
+    // Normalizing the last value in that window gives 0.8526316, rounded to .853.
+    REQUIRE_NEAR(raw[4], 0, 1e-6);
+    REQUIRE_NEAR(raw[5], 0.853, 1e-6);
+    REQUIRE_NEAR(raw[6], 0, 1e-6);
 }
 
 void test_apply_funding_fee()
@@ -560,9 +483,8 @@ void test_realign_timestamps_noop_when_aligned()
 // ---------------------------------------------------------------------------
 //  Indicator library
 //
-//  Each test pins output length, warmup position, and at least one value with a
-//  known analytic answer -- shape-only assertions would pass on a wrapper plumbed
-//  to the wrong TA-Lib function.
+//  Hand-computed values and limiting cases check numerical meaning. Shape and
+//  readiness checks supplement them; neither alone establishes correctness.
 // ---------------------------------------------------------------------------
 
 // A deterministic oscillating-with-drift OHLCV series, enough bars to clear any
@@ -600,7 +522,6 @@ std::vector<float> make_ramp(const int n = 100)
 
 void test_moving_averages()
 {
-    TA_Initialize();
     const std::vector<float> ramp = make_ramp(100);
 
     // On a unit ramp, SMA(n) at index i is the mean of i-n+1..i = i - (n-1)/2.
@@ -619,14 +540,11 @@ void test_moving_averages()
     REQUIRE(warm_wma == 9);
     REQUIRE_NEAR(wma[50], 50.0f - 3.0f, 1e-3);
 
-    // On a pure linear trend every EMA-family average is a lag of the input; DEMA and
-    // TEMA reduce that lag, so they must sit strictly closer to the current value.
-    const std::vector<float> ema = TALIB_EMA(ramp, 10);
+    // DEMA and TEMA cancel a linear trend's lag after their SMA-seeded warmups.
     const std::vector<float> dema = TALIB_DEMA(ramp, 10);
     const std::vector<float> tema = TALIB_TEMA(ramp, 10);
-    const float current = ramp[90];
-    REQUIRE(std::fabs(dema[90] - current) < std::fabs(ema[90] - current));
-    REQUIRE(std::fabs(tema[90] - current) < std::fabs(ema[90] - current));
+    REQUIRE_NEAR(dema[90], 90, 1e-5);
+    REQUIRE_NEAR(tema[90], 90, 1e-5);
 
     // HMA is composed here rather than taken from TA-Lib; it must reduce lag too and
     // report a warmup that actually covers its zero-padded head.
@@ -635,76 +553,48 @@ void test_moving_averages()
     REQUIRE(hma.size() == ramp.size());
     REQUIRE(warm_hma > 0);
     REQUIRE(hma[warm_hma - 1] == 0.0f);
-    REQUIRE(std::fabs(hma[90] - current) < std::fabs(ema[90] - current));
+    REQUIRE_NEAR(hma[90], 89.3333333333333, 1e-4); // HMA(16) ramp lag is 2/3
 
     size_t warm_kama = 0;
     const std::vector<float> kama = TALIB_KAMA(ramp, 10, &warm_kama);
     REQUIRE(kama.size() == ramp.size());
-    REQUIRE(kama[90] > 0.0f);
-    TA_Shutdown();
+    REQUIRE_NEAR(kama[90], 88.75, 1e-5); // efficiency 1, smoothing 4/9, steady lag 5/4
 }
 
 void test_macd()
 {
-    TA_Initialize();
-    const Ohlcv s = make_series();
-    const MACDResult m = TALIB_MACD(s.close, 12, 26, 9);
-
-    REQUIRE(m.macd.size() == s.close.size());
-    REQUIRE(m.signal.size() == s.close.size());
-    REQUIRE(m.histogram.size() == s.close.size());
-    REQUIRE(m.warmup > 0);
-    REQUIRE(m.macd[m.warmup - 1] == 0.0f);
-
-    // The defining identity: histogram == macd - signal, past warmup.
-    bool identity_holds = true;
-    bool saw_both_signs = false;
-    int pos = 0, neg = 0;
-    for (size_t i = m.warmup; i < m.macd.size(); ++i)
-    {
-        identity_holds = identity_holds && std::fabs(m.histogram[i] - (m.macd[i] - m.signal[i])) < 1e-3;
-        pos += (m.histogram[i] > 0.0f) ? 1 : 0;
-        neg += (m.histogram[i] < 0.0f) ? 1 : 0;
-    }
-    saw_both_signs = pos > 0 && neg > 0;
-    REQUIRE(identity_holds);
-    REQUIRE(saw_both_signs); // an oscillating input must cross zero
-    TA_Shutdown();
+    const auto m = TALIB_MACD({10, 10, 10, 10, 10, 10, 16, 10, 10}, 3, 5, 2);
+    REQUIRE(m.warmup == 5 && m.macd.size() == 9);
+    // After the jump to 16, fast/slow EMAs are 13 and 12. The signal's
+    // smoothing weight is 2/3. One candle later the MACD is 1/6.
+    REQUIRE_NEAR(m.macd[6], 1, 1e-6);
+    REQUIRE_NEAR(m.signal[6], 2.0 / 3, 1e-6);
+    REQUIRE_NEAR(m.histogram[6], 1.0 / 3, 1e-6);
+    REQUIRE_NEAR(m.macd[7], 1.0 / 6, 1e-6);
+    REQUIRE_NEAR(m.signal[7], 1.0 / 3, 1e-6);
+    REQUIRE_NEAR(m.histogram[7], -1.0 / 6, 1e-6);
 }
 
 void test_stoch_and_aroon()
 {
-    TA_Initialize();
-    const Ohlcv s = make_series();
-
-    const StochResult st = TALIB_STOCH(s.high, s.low, s.close, 14, 3, 3);
-    REQUIRE(st.k.size() == s.close.size());
-    REQUIRE(st.d.size() == s.close.size());
-    REQUIRE(st.warmup > 0);
-    // %K and %D are percentages, so they must stay within [0, 100].
-    bool bounded = true;
-    for (size_t i = st.warmup; i < st.k.size(); ++i)
+    std::vector<float> high, low, close;
+    for (int i = 0; i < 60; ++i)
     {
-        bounded = bounded && st.k[i] >= -1e-3f && st.k[i] <= 100.001f && st.d[i] >= -1e-3f && st.d[i] <= 100.001f;
+        high.push_back(102 + i);
+        low.push_back(98 + i);
+        close.push_back(100 + i);
     }
-    REQUIRE(bounded);
-
-    const AroonResult ar = TALIB_AROON(s.high, s.low, 14);
-    REQUIRE(ar.up.size() == s.close.size());
-    REQUIRE(ar.down.size() == s.close.size());
-    bool aroon_bounded = true;
-    for (size_t i = ar.warmup; i < ar.up.size(); ++i)
-    {
-        aroon_bounded = aroon_bounded && ar.up[i] >= -1e-3f && ar.up[i] <= 100.001f && ar.down[i] >= -1e-3f &&
-                        ar.down[i] <= 100.001f;
-    }
-    REQUIRE(aroon_bounded);
-    TA_Shutdown();
+    const auto st = TALIB_STOCH(high, low, close, 14, 3, 3);
+    // Every mature 14-bar window has close-lowest=15 and highest-lowest=17.
+    REQUIRE_NEAR(st.k[50], 1500.0 / 17, 1e-5);
+    REQUIRE_NEAR(st.d[50], 1500.0 / 17, 1e-5);
+    const auto ar = TALIB_AROON(high, low, 14);
+    REQUIRE_NEAR(ar.up[50], 100, 1e-6);
+    REQUIRE_NEAR(ar.down[50], 0, 1e-6);
 }
 
 void test_momentum_family()
 {
-    TA_Initialize();
     const std::vector<float> ramp = make_ramp(100);
 
     // MOM(n) on a unit ramp is exactly n.
@@ -717,27 +607,16 @@ void test_momentum_family()
     const std::vector<float> roc = TALIB_ROC(ramp, 10);
     REQUIRE_NEAR(roc[50], 25.0f, 1e-3);
 
-    const Ohlcv s = make_series();
     size_t warm_cci = 0;
-    const std::vector<float> cci = TALIB_CCI(s.high, s.low, s.close, 20, &warm_cci);
-    REQUIRE(cci.size() == s.close.size());
+    const auto cci = TALIB_CCI(ramp, ramp, ramp, 20, &warm_cci);
     REQUIRE(warm_cci == 19);
-
-    size_t warm_u = 0;
-    const std::vector<float> ult = TALIB_ULTOSC(s.high, s.low, s.close, 7, 14, 28, &warm_u);
-    REQUIRE(ult.size() == s.close.size());
-    bool bounded = true;
-    for (size_t i = warm_u; i < ult.size(); ++i)
-    {
-        bounded = bounded && ult[i] >= -1e-3f && ult[i] <= 100.001f;
-    }
-    REQUIRE(bounded);
-    TA_Shutdown();
+    REQUIRE_NEAR(cci[50], 126.6666666667, 1e-4); // 9.5 / (.015 * mean deviation 5)
+    const auto ult = TALIB_ULTOSC(ramp, ramp, ramp, 7, 14, 28);
+    REQUIRE_NEAR(ult[50], 100, 1e-6); // buying pressure equals true range in each window
 }
 
 void test_trend_strength_family()
 {
-    TA_Initialize();
     const Ohlcv s = make_series();
 
     const DirectionalResult dmi = TALIB_DMI(s.high, s.low, s.close, 14);
@@ -761,57 +640,45 @@ void test_trend_strength_family()
         up_l.push_back(99.0f + 2.0f * i);
     }
     const DirectionalResult up = TALIB_DMI(up_h, up_l, up_c, 14);
-    REQUIRE(up.plus_di[100] > up.minus_di[100]);
+    // Each upward move is 2 and true range is 3; DX/ADX therefore converge to 100.
+    REQUIRE_NEAR(up.plus_di[100], 200.0 / 3, 1e-4);
+    REQUIRE_NEAR(up.minus_di[100], 0, 1e-6);
+    REQUIRE_NEAR(up.adx[100], 100, 1e-4);
 
     // Parabolic SAR trails an uptrend from below.
     size_t warm_sar = 0;
     const std::vector<float> sar = TALIB_SAR(up_h, up_l, 0.02, 0.2, &warm_sar);
     REQUIRE(sar.size() == up_c.size());
     REQUIRE(sar[100] < up_c[100]);
-    TA_Shutdown();
 }
 
 void test_volatility_family()
 {
-    TA_Initialize();
-    const Ohlcv s = make_series();
-
-    size_t warm_natr = 0;
-    const std::vector<float> natr = TALIB_NATR(s.high, s.low, s.close, 14, &warm_natr);
-    REQUIRE(natr.size() == s.close.size());
-    REQUIRE(natr[100] > 0.0f);
-
-    // TRANGE on this series is a constant 2.4 (high-low), since gaps never dominate.
-    size_t warm_tr = 0;
-    const std::vector<float> tr = TALIB_TRANGE(s.high, s.low, s.close, &warm_tr);
-    REQUIRE(tr.size() == s.close.size());
-    REQUIRE(tr[100] >= 2.4f - 1e-3f);
-
-    // StdDev of a constant series is 0.
-    const std::vector<float> flat(80, 42.0f);
-    const std::vector<float> sd = TALIB_STDDEV(flat, 20, 1.0);
-    REQUIRE_NEAR(sd[50], 0.0f, 1e-4);
-
-    // Keltner: bands straddle the EMA centreline, upper above lower.
-    const BandsResult kc = KELTNER_CHANNELS(s.high, s.low, s.close, 20, 10, 2.0f);
-    REQUIRE(kc.upper.size() == s.close.size());
-    REQUIRE(kc.warmup > 0);
-    REQUIRE(kc.upper[100] > kc.middle[100]);
-    REQUIRE(kc.middle[100] > kc.lower[100]);
-
-    // Donchian: upper is the rolling high, lower the rolling low, middle the midpoint,
-    // and price must lie inside the envelope.
-    const BandsResult dc = DONCHIAN_CHANNELS(s.high, s.low, 20);
-    REQUIRE(dc.upper.size() == s.close.size());
-    REQUIRE_NEAR(dc.middle[100], 0.5f * (dc.upper[100] + dc.lower[100]), 1e-3);
-    REQUIRE(dc.upper[100] >= s.high[100]);
-    REQUIRE(dc.lower[100] <= s.low[100]);
-    TA_Shutdown();
+    const std::vector<float> high(60, 52), low(60, 48), close(60, 50);
+    const auto natr = TALIB_NATR(high, low, close, 14);
+    REQUIRE_NEAR(natr[40], 8, 1e-6); // 4 / 50 * 100
+    const auto tr = TALIB_TRANGE({52, 52, 72}, {48, 48, 68}, {50, 50, 70});
+    REQUIRE_NEAR(tr[1], 4, 1e-6);
+    REQUIRE_NEAR(tr[2], 22, 1e-6); // opening gap dominates high-low
+    const auto flat_sd = TALIB_STDDEV(close, 20, 1);
+    REQUIRE_NEAR(flat_sd[40], 0, 1e-6);
+    const auto ramp_sd = TALIB_STDDEV({1, 2, 3, 4, 5}, 3, 1);
+    REQUIRE_NEAR(ramp_sd[4], 0.816496580927726, 1e-6);
+    const auto kc = KELTNER_CHANNELS(high, low, close, 20, 10, 2);
+    REQUIRE_NEAR(kc.middle[40], 50, 1e-6);
+    REQUIRE_NEAR(kc.upper[40], 58, 1e-6);
+    REQUIRE_NEAR(kc.lower[40], 42, 1e-6);
+    const auto dc = DONCHIAN_CHANNELS({11, 15, 12, 13, 14}, {9, 7, 10, 11, 12}, 3);
+    REQUIRE_NEAR(dc.upper[3], 15, 1e-6);
+    REQUIRE_NEAR(dc.lower[3], 7, 1e-6);
+    REQUIRE_NEAR(dc.middle[3], 11, 1e-6);
+    REQUIRE_NEAR(dc.upper[4], 14, 1e-6); // old extrema have left the window
+    REQUIRE_NEAR(dc.lower[4], 10, 1e-6);
+    REQUIRE_NEAR(dc.middle[4], 12, 1e-6);
 }
 
 void test_volume_family()
 {
-    TA_Initialize();
 
     // OBV has an exact hand-checkable definition: add volume on an up close, subtract
     // on a down close, carry on unchanged.
@@ -825,40 +692,30 @@ void test_volume_family()
     REQUIRE_NEAR(obv[3], 0.0f, 1e-3);   // flat -> unchanged
     REQUIRE_NEAR(obv[4], 500.0f, 1e-3); // up   -> +500
 
-    const Ohlcv s = make_series();
-    size_t warm_mfi = 0;
-    const std::vector<float> mfi = TALIB_MFI(s.high, s.low, s.close, s.volume, 14, &warm_mfi);
-    REQUIRE(mfi.size() == s.close.size());
-    bool bounded = true;
-    for (size_t i = warm_mfi; i < mfi.size(); ++i)
-    {
-        bounded = bounded && mfi[i] >= -1e-3f && mfi[i] <= 100.001f;
-    }
-    REQUIRE(bounded);
-
-    const std::vector<float> ad = TALIB_AD(s.high, s.low, s.close, s.volume);
-    REQUIRE(ad.size() == s.close.size());
-    const std::vector<float> adosc = TALIB_ADOSC(s.high, s.low, s.close, s.volume, 3, 10);
-    REQUIRE(adosc.size() == s.close.size());
-
-    // Constant price and volume make rolling VWAP exactly the typical price.
-    const std::vector<float> ch(60, 50.0f), hh(60, 52.0f), lh(60, 48.0f), vv(60, 10.0f);
+    const std::vector<float> rising{10, 11, 12, 13, 14}, volume(5, 100);
+    REQUIRE_NEAR(TALIB_MFI(rising, rising, rising, volume, 3)[4], 100, 1e-6);
+    const std::vector<float> falling{14, 13, 12, 11, 10};
+    REQUIRE_NEAR(TALIB_MFI(falling, falling, falling, volume, 3)[4], 0, 1e-6);
+    const std::vector<float> high(5, 12), low(5, 8), last{11, 9, 10, 12, 8};
+    const auto ad = TALIB_AD(high, low, last, vol);
+    // Money-flow multipliers .5,-.5,0,1,-1 give cumulative flows 50,-50,-50,350,-150.
+    REQUIRE_NEAR(ad[0], 50, 1e-6);
+    REQUIRE_NEAR(ad[3], 350, 1e-6);
+    REQUIRE_NEAR(ad[4], -150, 1e-6);
+    const auto osc = TALIB_ADOSC(high, low, last, vol, 2, 3);
+    // EMAs seeded at flow 50 have values -350/9 and -25 after the third candle.
+    REQUIRE_NEAR(osc[2], -125.0 / 9, 1e-5);
     size_t warm_vwap = 0;
-    const std::vector<float> vwap = VWAP_ROLLING(hh, lh, ch, vv, 20, &warm_vwap);
-    REQUIRE(warm_vwap == 19);
-    REQUIRE_NEAR(vwap[40], 50.0f, 1e-3); // hlc3 of (52,48,50) == 50
-    REQUIRE(vwap[18] == 0.0f);           // warmup zero-padded
-
-    // Relative volume is 1.0 when volume equals its own average.
-    size_t warm_rv = 0;
-    const std::vector<float> rv = RELATIVE_VOLUME(vv, 20, &warm_rv);
-    REQUIRE_NEAR(rv[40], 1.0f, 1e-4);
-    // Double the volume on the last bar -> above 1.
-    std::vector<float> spiky = vv;
-    spiky[50] = 100.0f;
-    const std::vector<float> rv2 = RELATIVE_VOLUME(spiky, 20, nullptr);
-    REQUIRE(rv2[50] > 1.0f);
-    TA_Shutdown();
+    const auto vwap = VWAP_ROLLING({10, 20, 30}, {10, 20, 30}, {10, 20, 30}, {1, 2, 3}, 2, &warm_vwap);
+    REQUIRE(warm_vwap == 1);
+    REQUIRE_NEAR(vwap[1], 50.0 / 3, 1e-5);
+    REQUIRE_NEAR(vwap[2], 26, 1e-6);
+    const auto rv = RELATIVE_VOLUME(std::vector<float>(60, 10), 20);
+    REQUIRE_NEAR(rv[40], 1, 1e-6);
+    std::vector<float> spiky(60, 10);
+    spiky[50] = 100;
+    const auto spike = RELATIVE_VOLUME(spiky, 20);
+    REQUIRE_NEAR(spike[50], 200.0 / 29, 1e-6); // 100 against a window mean of 14.5
 }
 
 void test_price_transforms_and_heikin_ashi()
@@ -879,10 +736,9 @@ void test_price_transforms_and_heikin_ashi()
     REQUIRE_NEAR(ha.close[0], 11.0f, 1e-5);
     REQUIRE_NEAR(ha.open[0], 11.0f, 1e-5);
     REQUIRE_NEAR(ha.close[1], (12.0f + 16.0f + 9.0f + 15.0f) / 4.0f, 1e-5);
-    REQUIRE_NEAR(ha.open[1], 0.5f * (ha.open[0] + ha.close[0]), 1e-5);
-    // HA high/low must envelope the HA body.
-    REQUIRE(ha.high[1] >= std::max(ha.open[1], ha.close[1]));
-    REQUIRE(ha.low[1] <= std::min(ha.open[1], ha.close[1]));
+    REQUIRE_NEAR(ha.open[1], 11, 1e-5);
+    REQUIRE_NEAR(ha.high[1], 16, 1e-6);
+    REQUIRE_NEAR(ha.low[1], 9, 1e-6);
     REQUIRE(ha.warmup == 1);
 }
 
@@ -921,12 +777,10 @@ void test_resample_timeframe()
 
 void test_resample_timeframe_off_boundary_start()
 {
-    // Regression for the real bundled data: BTC 5m futures starts at 16:55, so slicing
-    // from index 0 built "hourly" candles spanning 16:55 to 17:50. The resampler must
-    // skip forward to the first true hour boundary and report that offset.
+    // A partial first hour must be skipped, with its offset preserved in projection.
     KLINEf in{};
     const int64_t hour = 1687104000;  // an exact hour
-    const int64_t start = hour - 300; // 5 minutes earlier: 16:55
+    const int64_t start = hour - 300; // 5 minutes earlier: 15:55
     for (int i = 0; i < 26; ++i)
     {
         in.timestamp.push_back(start + i * 300);
@@ -940,7 +794,7 @@ void test_resample_timeframe_off_boundary_start()
     in.name = "OFFSET";
 
     const Resampled r = RESAMPLE_TIMEFRAME(in, 12, 5, 60);
-    // Bar 0 is 16:55; bar 1 is 17:00 and starts the first whole hour.
+    // Bar 0 is 15:55; bar 1 is 16:00 and starts the first whole hour.
     REQUIRE(r.ltf_offset == 1);
     REQUIRE(r.kline.nb == 2);
     REQUIRE(r.kline.timestamp[0] == hour);
@@ -952,12 +806,10 @@ void test_resample_timeframe_off_boundary_start()
     // Projecting back must respect the same offset.
     const std::vector<float> proj = PROJECT_HTF_TO_LTF({7.0f, 8.0f}, 12, in.close.size(), r.ltf_offset, -1.0f);
     REQUIRE(proj.size() == 26);
-    // Hour 0 spans bars 1..12 and closes at the end of bar 12, so bars 0..12 predate
-    // any completed hour and carry the fill.
+    // Bars 0..11 close before the first higher candle completes.
     REQUIRE(proj[0] == -1.0f);
     REQUIRE(proj[11] == -1.0f);
-    // Hour 0's value is visible from bar 13 through bar 24; hour 1 closes at bar 24 and
-    // becomes visible at bar 25.
+    // The first higher value is visible at bar 12's close, the second at bar 24's.
     REQUIRE(proj[12] == 7.0f);
     REQUIRE(proj[23] == 7.0f);
     REQUIRE(proj[24] == 8.0f);
@@ -1019,7 +871,6 @@ const NamedTest ALL_TESTS[] = {
     {"resample_timeframe", test_resample_timeframe},
     {"resample_timeframe_off_boundary_start", test_resample_timeframe_off_boundary_start},
     {"project_htf_to_ltf_has_no_lookahead", test_project_htf_to_ltf_has_no_lookahead},
-    {"record_wallet_snapshot_drawdown", test_record_wallet_snapshot_drawdown},
     {"futures_long_close_sign", test_futures_long_close_sign},
     {"futures_short_close_sign", test_futures_short_close_sign},
     {"integer_range", test_integer_range},
@@ -1031,9 +882,9 @@ const NamedTest ALL_TESTS[] = {
     {"find_min_all_positive", test_find_min_all_positive},
     {"get_funding_fee_timing", test_get_funding_fee_timing},
     {"talib_ema_warmup", test_talib_ema_warmup},
-    {"talib_bbands_shape", test_talib_bbands_shape},
-    {"talib_ao_shape", test_talib_ao_shape},
-    {"talib_stochrsi_range", test_talib_stochrsi_range},
+    {"talib_bbands_known_values", test_talib_bbands_known_values},
+    {"talib_ao_ramp", test_talib_ao_ramp},
+    {"talib_stochrsi_known_values", test_talib_stochrsi_known_values},
     {"apply_funding_fee", test_apply_funding_fee},
     {"calculate_calmar_ratio", test_calculate_calmar_ratio},
     {"realign_timestamps_noop_when_aligned", test_realign_timestamps_noop_when_aligned},
@@ -1042,6 +893,11 @@ const NamedTest ALL_TESTS[] = {
 
 int main()
 {
+    if (TA_Initialize() != TA_SUCCESS)
+    {
+        std::cerr << "FAIL: TA-Lib initialization\n";
+        return 1;
+    }
     for (const NamedTest &t : ALL_TESTS)
     {
         const int failures_before = g_fail_count;
@@ -1050,6 +906,7 @@ int main()
         std::cout << (ok ? "PASS " : "FAIL ") << t.name << "\n";
     }
 
+    TA_Shutdown();
     std::cout << "\n" << (g_run_count - g_fail_count) << " / " << g_run_count << " checks passed\n";
     if (g_fail_count != 0)
     {
