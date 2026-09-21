@@ -18,13 +18,11 @@ struct KLINEf
     std::vector<float> high;
     std::vector<float> low;
     std::vector<float> close;
-    // Base-asset volume. Both loaders always parsed this column and then discarded it,
-    // which made the whole volume indicator family (OBV, MFI, A/D, VWAP, relative
-    // volume) unreachable.
+    // Base-asset volume, retained for volume-based indicators.
     std::vector<float> volume;
-    uint nb;
+    uint nb = 0;
     std::string name;
-    uint start_idx;
+    uint start_idx = 0;
 
     // Precomputed indicator series for this pair, keyed by name + parameters. This
     // replaced two fixed 1000-slot arrays indexed directly by EMA period (any period
@@ -38,8 +36,8 @@ struct fundings
 {
     std::vector<int64_t> timestamp;
     std::vector<float> funding;
-    // Mirrors `timestamp` for fast exact funding lookups during futures backtests.
+    // Exact lookup for legacy rate-only fixture consumers. Research uses FundingEvent.
     std::unordered_map<int64_t, float> funding_by_timestamp;
-    uint nb;
+    uint nb = 0;
     std::string name;
 };

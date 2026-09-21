@@ -1,0 +1,6 @@
+# Process-local ASLR control for GCC sanitizers on newer Linux kernels.
+# Apply only to the disposable sanitizer run, not ordinary research containers.
+services:
+  backtest:
+    security_opt:
+      - seccomp=unconfined

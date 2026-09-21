@@ -5,3 +5,6 @@
 *.csv binary
 *.zip binary
 *.exe binary
+
+# Configuration should be reviewable; large market-data JSON remains binary.
+backtest_config.json text diff eol=lf

@@ -1,62 +1,50 @@
 #include "trade_core.hh"
-
 namespace trade_core
 {
-void record_wallet_snapshot(const double wallet_val_usdt, const int64_t timestamp, double &max_wallet_val_usdt, double &max_drawdown, WalletTrace &trace)
+void record_wallet_snapshot(double value, int64_t time, double &peak, double &dd, WalletTrace &trace)
 {
-    if (wallet_val_usdt > max_wallet_val_usdt)
-    {
-        max_wallet_val_usdt = wallet_val_usdt;
-    }
-
-    const double pc_change_with_max = (wallet_val_usdt - max_wallet_val_usdt) / max_wallet_val_usdt * 100.0;
-    if (pc_change_with_max < max_drawdown)
-    {
-        max_drawdown = pc_change_with_max;
-    }
-
-    trace.wallet_values.push_back(wallet_val_usdt);
-    trace.timestamps.push_back(timestamp);
+    if (!(peak > 0) || !std::isfinite(value))
+        throw std::runtime_error("Invalid equity observation");
+    peak = std::max(peak, value);
+    dd = std::min(dd, 100 * (value / peak - 1));
+    trace.wallet_values.push_back(value);
+    trace.timestamps.push_back(time);
 }
-
-ResultMetrics calculate_result_metrics(const double wallet_val_usdt, const double initial_usdt, const double max_drawdown, const TradeStats &stats)
+ResultMetrics calculate_result_metrics(double final, double initial, double dd, const TradeStats &stats)
 {
-    ResultMetrics metrics{};
-    metrics.gain = (wallet_val_usdt - initial_usdt) / initial_usdt * 100.0;
-
-    // A parameter set that never entered a position: win_rate would be 0/0. Report a
-    // neutral, finite result instead of letting NaN reach the banner and score file.
-    if (stats.nb_positions_entered == 0)
+    ResultMetrics m;
+    if (!(initial > 0) || !std::isfinite(final))
+        return m;
+    m.gain = 100 * (final / initial - 1);
+    if (stats.nb_closed)
+        m.win_rate = 100.0 * stats.nb_profit / stats.nb_closed;
+    if (dd < 0 && dd > -100)
     {
-        return metrics;
+        m.ddc = 100 * (1 / (1 + dd / 100) - 1);
+        m.gain_over_ddc = m.gain / m.ddc;
+        m.score = m.gain_over_ddc * m.win_rate;
     }
-
-    metrics.win_rate = double(stats.nb_profit) / double(stats.nb_positions_entered) * 100.0;
-
-    // "Drawdown corrected": the gain needed to recover from max_drawdown. Zero drawdown
-    // makes it 0, so guard the two divisions below rather than emitting +/-inf -- an inf
-    // score would win the sweep outright over every genuinely-measured candidate.
-    metrics.ddc = (1.0 / (1.0 + max_drawdown / 100.0) - 1.0) * 100.0;
-    if (!(metrics.ddc > 0.0))
-    {
-        return metrics;
-    }
-
-    metrics.gain_over_ddc = metrics.gain / metrics.ddc;
-    metrics.score = metrics.gain_over_ddc * metrics.win_rate;
-    return metrics;
+    return m;
 }
-
-void populate_common_result(RUN_RESULTf &result, const ResultMetrics &metrics, const double wallet_val_usdt, const double max_drawdown, const double total_fees_paid_usdt, const TradeStats &stats, const uint max_open_trades)
+void populate_common_result(RUN_RESULTf &r, const ResultMetrics &m, double wallet, double dd, double fees,
+                            const TradeStats &s, uint limit)
 {
-    result.WALLET_VAL_USDT = wallet_val_usdt;
-    result.gain_over_DDC = metrics.gain_over_ddc;
-    result.gain_pc = metrics.gain;
-    result.max_DD = max_drawdown;
-    result.nb_posi_entered = stats.nb_positions_entered;
-    result.win_rate = metrics.win_rate;
-    result.score = metrics.score;
-    result.total_fees_paid = total_fees_paid_usdt;
-    result.max_open_trades = max_open_trades;
+    r.WALLET_VAL_USDT = wallet;
+    r.gain_pc = m.gain;
+    r.win_rate = m.win_rate;
+    r.max_DD = dd;
+    r.gain_over_DDC = m.gain_over_ddc;
+    r.score = m.score;
+    r.total_fees_paid = fees;
+    r.nb_posi_entered = s.nb_positions_entered;
+    r.max_open_trades = limit;
+}
+std::optional<double> calmar_ratio(double initial, double final, int64_t seconds, double dd)
+{
+    if (!(initial > 0 && final > 0 && seconds > 0 && dd < 0 && dd > -100))
+        return std::nullopt;
+    const double cagr = std::expm1(std::log(final / initial) * (365.25 * 86400) / double(seconds));
+    const double ratio = cagr / (-dd / 100);
+    return std::isfinite(ratio) ? std::optional<double>(ratio) : std::nullopt;
 }
 } // namespace trade_core

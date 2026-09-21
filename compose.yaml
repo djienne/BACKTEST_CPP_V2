@@ -1,0 +1,7 @@
+services:
+  backtest:
+    build: .
+    working_dir: /workspace
+    volumes:
+      - .:/workspace
+    init: true

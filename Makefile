@@ -1,9 +1,9 @@
 # ---------------------------------------------------------------------------
 #  Trading Strategy Backtester -- build system
 #
-#    make                    default strategy (backtest_double_EMA_float.exe)
+#    make                    default strategy (build/release/backtest_double_EMA_float.exe)
 #    make all                every strategy + regression drivers + unit tests
-#    make <Name>             one strategy, e.g. `make BigWill` or `make BigWill.exe`
+#    make <Name>             one strategy, e.g. `make BigWill`
 #    make tests              unit suite
 #    make BUILD=debug all    -O0 -g
 #    make BUILD=asan tests   AddressSanitizer + UndefinedBehaviorSanitizer
@@ -23,13 +23,13 @@ TALIB_DIR := talib/talib_install
 TALIB_INC := -I$(TALIB_DIR)/include
 # $ORIGIN-relative rpath: binaries find the in-tree TA-Lib without LD_LIBRARY_PATH,
 # and keep working if the whole repo is moved.
-TALIB_LIB := -L$(TALIB_DIR)/lib -Wl,-rpath,'$$ORIGIN/$(TALIB_DIR)/lib' -lta_lib
+TALIB_LIB := -L$(TALIB_DIR)/lib -Wl,-rpath,'$$ORIGIN/../../$(TALIB_DIR)/lib' -lta_lib
 
 BUILD ?= release
 
 # -O3 -fno-trapping-math rather than -Ofast: this backtester is numerics-sensitive and
 # -Ofast implies -ffast-math, which silently re-associates float operations and
-# invalidates the regression fixtures.
+# can invalidate finite-value checks and numerical comparisons.
 CXXFLAGS_release := -O3 -fno-trapping-math -DNDEBUG
 CXXFLAGS_debug   := -O0 -g
 CXXFLAGS_asan    := -O1 -g -fno-omit-frame-pointer -fsanitize=address,undefined
@@ -43,46 +43,45 @@ ifeq ($(origin CXXFLAGS_$(BUILD)),undefined)
 $(error Unknown BUILD='$(BUILD)'. Use one of: release debug asan tsan)
 endif
 
-# -Wsign-compare and -Wunused-parameter were suppressed here. Re-enabled: the first
-# already caught a real defect (an aggregate initializer short one member, which left a
-# strategy unable to open any position). -Wshadow is new -- a shadowed member was how
-# RandomNumberGenerator silently discarded its own seeding.
 WARNINGS := -Wall -Wextra -Wshadow
 
-CXXFLAGS := -std=gnu++17 $(CXXFLAGS_$(BUILD)) $(WARNINGS) $(TALIB_INC) -MMD -MP
+REVISION := $(shell git rev-parse --short HEAD 2>/dev/null || echo unknown)$(shell git diff --quiet -- . ":(exclude)data" || echo -dirty)
+CXXFLAGS := -DBACKTEST_REVISION=\"$(REVISION)\" -std=gnu++17 $(CXXFLAGS_$(BUILD)) $(WARNINGS) $(TALIB_INC) -MMD -MP
 LDFLAGS  := $(LDFLAGS_$(BUILD))
 LDLIBS   := $(TALIB_LIB) -lpthread
 
 OBJDIR := build/$(BUILD)
 
 # Shared library layer, linked into every binary.
-COMMON_SRC := indicators.cpp tools.cpp trade_core.cpp config.cpp
+COMMON_SRC := indicators.cpp tools.cpp trade_core.cpp config.cpp data_io.cpp
 # Non-strategy executables (unit tests + numeric regression harnesses).
-DRIVER_SRC := tests.cpp verification_regression.cpp strategy_regression.cpp
+DRIVER_SRC := tests.cpp execution_tests.cpp verification_regression.cpp strategy_regression.cpp
 # Everything else in the root is a strategy.
 STRATEGY_SRC := $(filter-out $(COMMON_SRC) $(DRIVER_SRC),$(wildcard *.cpp))
 
 COMMON_OBJ := $(addprefix $(OBJDIR)/,$(COMMON_SRC:.cpp=.o))
 STRATEGIES := $(STRATEGY_SRC:.cpp=)
 DRIVERS    := $(DRIVER_SRC:.cpp=)
-ALL_EXE    := $(addsuffix .exe,$(STRATEGIES) $(DRIVERS))
+ALL_EXE    := $(addprefix $(OBJDIR)/,$(addsuffix .exe,$(STRATEGIES) $(DRIVERS)))
+ALL_OBJ    := $(addprefix $(OBJDIR)/,$(COMMON_SRC:.cpp=.o) $(STRATEGY_SRC:.cpp=.o) $(DRIVER_SRC:.cpp=.o))
+.SECONDARY: $(ALL_OBJ)
 
 .PHONY: default all clean format help $(STRATEGIES) $(DRIVERS) verification
 
-default: backtest_double_EMA_float.exe
+default: $(OBJDIR)/backtest_double_EMA_float.exe
 
 all: $(ALL_EXE)
 
-# `make BigWill` as a shorthand for `make BigWill.exe`, for every discovered target.
-$(STRATEGIES) $(DRIVERS): %: %.exe
+# Named aliases build the executable in the selected build-mode directory.
+$(STRATEGIES) $(DRIVERS): %: $(OBJDIR)/%.exe
 
-# Kept because the README documents it.
-verification: verification_regression.exe
+# Loader verification driver.
+verification: $(OBJDIR)/verification_regression.exe
 
 $(OBJDIR)/%.o: %.cpp | $(OBJDIR)
 	$(CXX) $(CXXFLAGS) -c $< -o $@
 
-%.exe: $(OBJDIR)/%.o $(COMMON_OBJ)
+$(OBJDIR)/%.exe: $(OBJDIR)/%.o $(COMMON_OBJ)
 	$(CXX) $(LDFLAGS) $^ $(LDLIBS) -o $@
 
 $(OBJDIR):

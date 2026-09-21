@@ -12,7 +12,7 @@
 //     optional `size_t *warmup` out-parameter; multi-output results carry a
 //     `warmup` field. series[i] is only a real value for i >= warmup -- reading
 //     earlier than that means comparing against padding, which is how a strategy
-//     silently trades on zeros. Use strategy_runner::first_tradable_index().
+//     silently trades on zeros. Use the readiness guard in strategy_runner::evaluate().
 //
 //   * Empty input gives empty output rather than aborting.
 //
@@ -184,8 +184,7 @@ BandsResult KELTNER_CHANNELS(const std::vector<float> &high, const std::vector<f
 // Donchian: rolling high/low envelope with their midline. Not in TA-Lib.
 BandsResult DONCHIAN_CHANNELS(const std::vector<float> &high, const std::vector<float> &low, const int period);
 
-// Legacy out-parameter form of Bollinger Bands, kept because several strategies call
-// it in a hot loop with pre-allocated destinations. Prefer TALIB_BBANDS_R in new code.
+// Out-parameter compatibility form. New strategy preparation uses TALIB_BBANDS_R.
 void TALIB_BBANDS(const std::vector<float> &close,
                   const float &optInNbDevUp, const float &optInNbDevDn, const int &length,
                   std::vector<float> &OUT_u, std::vector<float> &OUT_m, std::vector<float> &OUT_l);
@@ -241,18 +240,10 @@ struct Resampled
 // dropped, since an unfinished candle is not a candle.
 Resampled RESAMPLE_TIMEFRAME(const KLINEf &kline_in, const int bars_per_group, const int ltf_minutes, const int htf_minutes);
 
-// Projects a high-timeframe series back onto the low-timeframe index, repeating each
-// value `bars_per_group` times and shifting right by one full group.
-//
-// The shift is what prevents lookahead bias: a high-timeframe candle's value is only
-// known once that candle closes, so it must not be visible to the bars that formed it.
-// `ltf_offset` must be the value RESAMPLE_TIMEFRAME reported, so the projection lands
-// on the same bars the aggregation came from. `fill` is written into the leading bars
-// that have no completed higher candle yet.
-//
-// Neither trailing parameter is defaulted, deliberately: with a default on ltf_offset,
-// a caller writing PROJECT_HTF_TO_LTF(s, 12, n, -777.0f) silently binds the fill value
-// to the size_t offset and compiles clean.
+// At the close of the last lower candle forming a higher candle, publish that
+// higher value. It stays available until the next higher candle completes. The
+// executor consumes completed-close signals at the next opening. ltf_offset must
+// come from RESAMPLE_TIMEFRAME; fill marks bars without a completed higher candle.
 std::vector<float> PROJECT_HTF_TO_LTF(const std::vector<float> &htf_series, const int bars_per_group,
                                       const size_t ltf_size, const size_t ltf_offset, const float fill);
 

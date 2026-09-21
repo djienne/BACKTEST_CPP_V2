@@ -2,30 +2,13 @@
 
 #include <string>
 #include <unordered_map>
+#include <unordered_set>
 #include <vector>
 
 #include "tools_fatal.hh"
 
-// Per-pair store of precomputed indicator series, keyed by indicator name plus its
-// parameters.
-//
-// This replaces two things in KLINEf:
-//
-//   * std::array<std::vector<float>, 1000> EMA (and EMA_1h), indexed directly by
-//     period. Any period >= 1000 was silent out-of-bounds, and the two arrays cost
-//     ~48 KB of mostly-empty vector headers per pair.
-//   * a fixed list of named members (ATR, StochRSI, StochRSI_K/D, AO, WILLR,
-//     BollB_U/M/L, SuperTrend_1h) that every strategy shared whether it used them or
-//     not -- so adding an indicator to one strategy meant editing the struct that all
-//     of them depend on.
-//
-// PERFORMANCE: get() hashes a string. Hoist the reference out of the per-bar loop:
-//
-//     const std::vector<float> &ema = pair.indicators.get(IndicatorCache::key("EMA", n));
-//     for (uint ii = ...) { ... ema[ii] ... }
-//
-// not `pair.indicators.get(...)[ii]` inside the loop, which is the mistake the
-// string-keyed EMA_LISTS maps used to make once or twice per bar per pair.
+// Worker-local indicator series and their first usable indices. Keep references
+// outside the bar loop; discard unreferenced parameter series after each trial.
 class IndicatorCache
 {
 public:
@@ -42,9 +25,15 @@ public:
         return key(name + ":" + std::to_string(first), rest...);
     }
 
-    void put(const std::string &k, std::vector<float> series)
+    void put(const std::string &k, std::vector<float> series, size_t first_valid = 0)
     {
         series_by_key_[k] = std::move(series);
+        first_valid_[k] = first_valid;
+    }
+
+    size_t first_valid(const std::string &k) const
+    {
+        return first_valid_.at(k);
     }
 
     bool has(const std::string &k) const
@@ -60,9 +49,30 @@ public:
         const auto it = series_by_key_.find(k);
         if (it == series_by_key_.end())
         {
-            BACKTEST_FATAL("IndicatorCache: no series for key '" + k + "'. Compute it in CALCULATE_INDICATORS first.");
+            BACKTEST_FATAL("IndicatorCache: no series for key '" + k + "'. Compute it before evaluation.");
         }
+        used_.insert(k);
         return it->second;
+    }
+
+    void begin_trial()
+    {
+        used_.clear();
+    }
+    // Retain only the current parameter set. Common series survive across trials;
+    // varying series use at most previous + current trial memory during preparation.
+    void discard_unused()
+    {
+        for (auto it = series_by_key_.begin(); it != series_by_key_.end();)
+        {
+            if (!used_.count(it->first))
+            {
+                first_valid_.erase(it->first);
+                it = series_by_key_.erase(it);
+            }
+            else
+                ++it;
+        }
     }
 
     // Drop one series. Used by strategies that cache a sweep-expensive indicator
@@ -74,11 +84,13 @@ public:
     void erase(const std::string &k)
     {
         series_by_key_.erase(k);
+        first_valid_.erase(k);
     }
 
     void clear()
     {
         series_by_key_.clear();
+        first_valid_.clear();
     }
 
     size_t size() const
@@ -88,4 +100,6 @@ public:
 
 private:
     std::unordered_map<std::string, std::vector<float>> series_by_key_;
+    std::unordered_map<std::string, size_t> first_valid_;
+    mutable std::unordered_set<std::string> used_;
 };

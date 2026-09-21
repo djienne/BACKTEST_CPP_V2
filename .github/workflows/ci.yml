@@ -1,49 +1,14 @@
 name: CI
-
-on:
-  push:
-    branches: ["**"]
-  pull_request:
-
+on: [push, pull_request]
 jobs:
-  build-and-test:
+  behavioral:
     runs-on: ubuntu-latest
-
     steps:
       - uses: actions/checkout@v5
-
-      - name: Install build dependencies
-        run: sudo apt-get update && sudo apt-get install -y build-essential unzip nlohmann-json3-dev
-
-      # TA-Lib ships as a zip in-tree. Its own src/tools/gen_code target races under
-      # `make -j`, so the library must be built serially.
-      - name: Build TA-Lib
-        run: |
-          unzip -q -o talib.zip
-          cd talib
-          ./configure --prefix="$(pwd)/talib_install/" > /dev/null
-          make > /dev/null
-          make install > /dev/null
-
-      # Invoked through bash rather than as ./run_regression.sh. The script is tracked
-      # executable, but a commit authored on a Windows checkout (where
-      # core.filemode=false) can silently drop the bit again -- which is exactly how this
-      # step first failed, with exit 126.
-      #
-      # The gate needs no network: it runs against the small committed data slice, and the
-      # downloader tests exercise pure logic only.
-      - name: Regression gate (build + unit tests + numeric fixtures)
-        run: bash ./run_regression.sh
-
-      # Sanitizers run against the unit suite only: it is fast and has no data-file
-      # dependency, which is what makes it a usable gate on every push.
-      - name: AddressSanitizer + UBSan
-        run: |
-          make BUILD=asan tests
-          ASAN_OPTIONS=detect_leaks=0 UBSAN_OPTIONS=halt_on_error=1 ./tests.exe
-
-      - name: ThreadSanitizer
-        run: |
-          make clean
-          make BUILD=tsan tests
-          TSAN_OPTIONS=halt_on_error=1 ./tests.exe
+      - run: docker compose build
+      - name: Release build and independent checks
+        run: docker compose run --rm -T backtest bash run_regression.sh
+      - name: AddressSanitizer and UndefinedBehaviorSanitizer
+        run: docker compose -f compose.yaml -f compose.sanitizers.yaml run --rm -T backtest setarch x86_64 -R bash run_regression.sh asan
+      - name: ThreadSanitizer including concurrent search
+        run: docker compose -f compose.yaml -f compose.sanitizers.yaml run --rm -T backtest setarch x86_64 -R bash run_regression.sh tsan

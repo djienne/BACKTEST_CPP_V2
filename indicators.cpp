@@ -82,7 +82,7 @@ std::vector<float> build_talib_output(const size_t input_size, const TA_Integer 
 
     if (warmup != nullptr)
     {
-        *warmup = static_cast<size_t>(outBeg);
+        *warmup = outNbElement == 0 ? input_size : static_cast<size_t>(outBeg);
     }
 
     return output;
@@ -579,36 +579,26 @@ std::vector<float> TALIB_SAR(const std::vector<float> &high, const std::vector<f
 
 std::vector<float> TALIB_TRIX(const std::vector<float> &vals, const int trixLength, const int trixSignal)
 {
-    // Triple-smoothed EMA, then its percent change, then that minus its own SMA. This
-    // is the "TRIX histogram" convention, not TA-Lib's TA_TRIX (which returns the
-    // percent-change line alone).
-    std::vector<float> TRIX = TALIB_EMA(vals, trixLength);
-    TRIX = TALIB_EMA(TRIX, trixLength);
-    TRIX = TALIB_EMA(TRIX, trixLength);
-
-    std::vector<float> TRIX_PCT;
-    TRIX_PCT.reserve(vals.size());
-    TRIX_PCT.push_back(0.0f);
-    for (size_t i = 1; i < TRIX.size(); i++)
-    {
-        float val = (TRIX[i] - TRIX[i - 1]) / TRIX[i - 1] * 100.0f;
-        if (std::isinf(val) || std::isnan(val))
-        {
-            val = 0.0f;
-        }
-        TRIX_PCT.push_back(val);
+    // TRIX histogram: percent change of a triple EMA minus its signal SMA.
+    // Each smoothing stage starts on valid observations, never zero padding.
+    std::vector<float> out(vals.size(),0.0f), stage(vals);
+    size_t offset=0;
+    for(int pass=0;pass<3;++pass) {
+        size_t warm=0;
+        auto smoothed=TALIB_EMA(stage,trixLength,&warm);
+        if(warm>=smoothed.size()) return out;
+        offset+=warm;
+        stage.assign(smoothed.begin()+warm,smoothed.end());
     }
-
-    const std::vector<float> TRIX_SIGNAL = TALIB_SMA(TRIX_PCT, trixSignal);
-
-    std::vector<float> TRIX_HISTO;
-    TRIX_HISTO.reserve(TRIX_PCT.size());
-    for (size_t i = 0; i < TRIX_PCT.size(); i++)
-    {
-        TRIX_HISTO.push_back(TRIX_PCT[i] - TRIX_SIGNAL[i]);
-    }
-
-    return TRIX_HISTO;
+    if(stage.size()<2) return out;
+    std::vector<float> change;
+    for(size_t i=1;i<stage.size();++i)
+        change.push_back(stage[i-1]!=0 ? 100.0f*(stage[i]/stage[i-1]-1.0f) : 0.0f);
+    ++offset;
+    size_t warm=0;
+    auto signal=TALIB_SMA(change,trixSignal,&warm);
+    for(size_t i=warm;i<change.size();++i) out[offset+i]=change[i]-signal[i];
+    return out;
 }
 
 //////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
@@ -885,7 +875,8 @@ SuperTrend TALIB_SuperTrend(const std::vector<float> &high, const std::vector<fl
         lowerband.push_back(hl2 - matr);
     }
 
-    for (size_t ii = 1; ii < m; ii++)
+    // Seed from the first valid ATR band; zero-padded prehistory must not ratchet it.
+    for (size_t ii = warm_atr + 1; ii < m; ii++)
     {
         if (close[ii] > upperband[ii - 1])
         {
@@ -937,6 +928,12 @@ Resampled RESAMPLE_TIMEFRAME(const KLINEf &kline_in, const int bars_per_group, c
                                                   ") does not match htf/ltf (" + std::to_string(htf_minutes) + "/" +
                                                   std::to_string(ltf_minutes) + ")");
     }
+
+    check_same_size("RESAMPLE_TIMEFRAME", {{"time", kline_in.timestamp.size()}, {"open", kline_in.open.size()},
+        {"high", kline_in.high.size()}, {"low", kline_in.low.size()}, {"close", kline_in.close.size()}});
+    for (size_t i = 1; i < kline_in.timestamp.size(); ++i)
+        if (kline_in.timestamp[i] - kline_in.timestamp[i-1] != ltf_minutes * 60LL)
+            indicator_fatal("RESAMPLE_TIMEFRAME", "unrepaired gap or unordered input");
 
     Resampled result{};
     result.bars_per_group = bars_per_group;
@@ -1018,12 +1015,10 @@ std::vector<float> PROJECT_HTF_TO_LTF(const std::vector<float> &htf_series, cons
     const size_t group = static_cast<size_t>(bars_per_group);
     std::vector<float> out(ltf_size, fill);
 
-    // Shift right by one full group: candle g's value is only known once candle g has
-    // closed, so it becomes visible on the first bar of group g+1. Without this the
-    // strategy would read a higher-timeframe close while that candle was still forming.
+    // First available at the completing lower candle's close; orders fill next open.
     for (size_t g = 0; g < htf_series.size(); ++g)
     {
-        const size_t begin = ltf_offset + (g + 1) * group;
+        const size_t begin = ltf_offset + (g + 1) * group - 1;
         if (begin >= ltf_size)
         {
             break;

@@ -1,169 +1,73 @@
 #include "config.hh"
-
 #include <cstdlib>
+#include <filesystem>
 #include <fstream>
 #include <iostream>
-
-#include "nlohmann/json.hpp"
-#include "tools_fatal.hh"
-
-using json = nlohmann::json;
+#include <set>
+#include <stdexcept>
+#include <nlohmann/json.hpp>
 
 namespace backtest_config
 {
-namespace
+int timeframe_seconds(const std::string &v)
 {
-
-std::string config_path()
-{
-    if (const char *env = std::getenv("BACKTEST_CONFIG"))
-    {
-        return std::string(env);
-    }
-    return "./backtest_config.json";
+    static const std::vector<std::pair<std::string, int>> supported = {
+        {"1m", 60},   {"3m", 180},   {"5m", 300},   {"15m", 900},  {"30m", 1800},  {"1h", 3600},
+        {"2h", 7200}, {"4h", 14400}, {"6h", 21600}, {"8h", 28800}, {"12h", 43200}, {"1d", 86400}};
+    for (const auto &item : supported)
+        if (item.first == v)
+            return item.second;
+    throw std::runtime_error("Unsupported timeframe: " + v);
 }
-
-std::string join_path(const std::string &dir, const std::string &leaf)
+StrategyConfig load(const std::string &name)
 {
-    if (dir.empty())
+    StrategyConfig c;
+    c.name = name;
+    c.path = std::getenv("BACKTEST_CONFIG") ? std::getenv("BACKTEST_CONFIG") : "backtest_config.json";
+    std::ifstream f(c.path);
+    if (!f)
+        throw std::runtime_error("Cannot open config: " + c.path);
+    const auto j = nlohmann::json::parse(f);
+    c.data_dir = j.value("data_dir", std::string("data/research"));
+    c.coins = j.at("coins").get<std::vector<std::string>>();
+    std::set<std::string> seen;
+    for (const auto &coin : c.coins)
     {
-        return leaf;
+        if (coin.empty() || coin.find_first_not_of("ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789") != std::string::npos ||
+            !seen.insert(coin).second)
+            throw std::runtime_error("Invalid or repeated coin: " + coin);
     }
-    return dir.back() == '/' ? dir + leaf : dir + "/" + leaf;
+    if (c.coins.empty() || c.coins.size() > MAX_PAIRS)
+        throw std::runtime_error("Expected 1..16 unique coins");
+    const auto &s = j.at("strategies").at(name);
+    c.market = s.at("market").get<std::string>();
+    c.timeframe = s.at("timeframe").get<std::string>();
+    c.htf = s.value("htf", std::string());
+    if (c.market != "spot" && c.market != "futures")
+        throw std::runtime_error("Invalid market");
+    const int tf = timeframe_seconds(c.timeframe);
+    if (!c.htf.empty() && (timeframe_seconds(c.htf) <= tf || timeframe_seconds(c.htf) % tf))
+        throw std::runtime_error("Higher timeframe must be a larger integral multiple");
+    const auto r = j.value("run", nlohmann::json::object());
+    c.start = r.value("start", std::string());
+    c.end = r.value("end", std::string());
+    const int64_t trials = r.value("max_trials", int64_t(1000));
+    const int64_t seed = r.value("seed", int64_t(42));
+    const int workers = r.value("workers", 1);
+    if (trials < 0 || seed < 0 || workers < 1 || workers > 16)
+        throw std::runtime_error("Invalid search settings");
+    c.max_trials = static_cast<uint64_t>(trials);
+    c.seed = static_cast<uint64_t>(seed);
+    c.workers = static_cast<unsigned>(workers);
+    c.holdout_fraction = r.value("holdout_fraction", 0.20);
+    if (!(c.holdout_fraction > 0 && c.holdout_fraction < 1))
+        throw std::runtime_error("Holdout fraction must be between 0 and 1");
+    c.offline = std::getenv("BACKTEST_OFFLINE") && std::string(std::getenv("BACKTEST_OFFLINE")) == "1";
+    return c;
 }
-
-} // namespace
-
-StrategyConfig load(const std::string &strategy_name)
+void print_summary(const StrategyConfig &c)
 {
-    const std::string path = config_path();
-
-    std::ifstream file(path);
-    if (!file.is_open())
-    {
-        BACKTEST_FATAL("Cannot open config '" + path +
-                       "'. Run from the repo root, or set BACKTEST_CONFIG to its location.");
-    }
-
-    json root;
-    try
-    {
-        root = json::parse(file, nullptr, true, /*ignore_comments=*/true);
-    }
-    catch (const json::parse_error &err)
-    {
-        BACKTEST_FATAL("Malformed config '" + path + "': " + err.what());
-    }
-
-    StrategyConfig cfg{};
-    cfg.name = strategy_name;
-    cfg.data_dir = root.value("data_dir", std::string("./data/data"));
-
-    if (!root.contains("coins") || !root["coins"].is_array() || root["coins"].empty())
-    {
-        BACKTEST_FATAL("Config '" + path + "' has no non-empty \"coins\" array.");
-    }
-    cfg.coins = root["coins"].get<std::vector<std::string>>();
-
-    if (cfg.coins.size() > MAX_PAIRS)
-    {
-        BACKTEST_FATAL("Config lists " + std::to_string(cfg.coins.size()) + " coins but MAX_PAIRS is " +
-                       std::to_string(MAX_PAIRS) + ". Raise MAX_PAIRS in config.hh and rebuild.");
-    }
-
-    const auto strategies = root.find("strategies");
-    if (strategies == root.end() || !strategies->is_object())
-    {
-        BACKTEST_FATAL("Config '" + path + "' has no \"strategies\" object.");
-    }
-
-    const auto entry = strategies->find(strategy_name);
-    if (entry == strategies->end())
-    {
-        // Deliberately fatal rather than defaulting: a strategy quietly guessing its
-        // market and timeframe is how a binary ends up reading files nobody downloads.
-        std::string known;
-        for (auto it = strategies->begin(); it != strategies->end(); ++it)
-        {
-            known += "\n    " + it.key();
-        }
-        BACKTEST_FATAL("Config '" + path + "' has no entry for strategy \"" + strategy_name +
-                       "\". Known strategies:" + known);
-    }
-
-    cfg.market = entry->value("market", std::string("spot"));
-    cfg.timeframe = entry->value("timeframe", std::string(""));
-    cfg.htf = entry->value("htf", std::string(""));
-
-    if (cfg.market != "spot" && cfg.market != "futures")
-    {
-        BACKTEST_FATAL("Strategy \"" + strategy_name + "\" has market \"" + cfg.market +
-                       "\"; expected \"spot\" or \"futures\".");
-    }
-    if (cfg.timeframe.empty())
-    {
-        BACKTEST_FATAL("Strategy \"" + strategy_name + "\" has no \"timeframe\".");
-    }
-
-    return cfg;
+    std::cout << c.name << " | " << c.market << " " << c.timeframe << " | seed " << c.seed << " | trials "
+              << c.max_trials << "\n";
 }
-
-std::vector<std::string> spot_paths(const StrategyConfig &cfg, const std::string &timeframe)
-{
-    const std::string tf = timeframe.empty() ? cfg.timeframe : timeframe;
-    std::vector<std::string> out;
-    out.reserve(cfg.coins.size());
-    for (const std::string &coin : cfg.coins)
-    {
-        out.push_back(join_path(cfg.data_dir, "binance/" + tf + "/" + coin + "-USDT.csv"));
-    }
-    return out;
-}
-
-std::vector<std::string> futures_paths(const StrategyConfig &cfg, const std::string &timeframe)
-{
-    const std::string tf = timeframe.empty() ? cfg.timeframe : timeframe;
-    std::vector<std::string> out;
-    out.reserve(cfg.coins.size());
-    for (const std::string &coin : cfg.coins)
-    {
-        out.push_back(join_path(cfg.data_dir, "futures/" + coin + "_USDT-" + tf + "-futures.json"));
-    }
-    return out;
-}
-
-std::vector<std::string> funding_paths(const StrategyConfig &cfg)
-{
-    std::vector<std::string> out;
-    out.reserve(cfg.coins.size());
-    for (const std::string &coin : cfg.coins)
-    {
-        out.push_back(join_path(cfg.data_dir, "futures/" + coin + "_USDT-8h-funding_rate.json"));
-    }
-    return out;
-}
-
-std::vector<std::string> data_paths(const StrategyConfig &cfg, const std::string &timeframe)
-{
-    return cfg.is_futures() ? futures_paths(cfg, timeframe) : spot_paths(cfg, timeframe);
-}
-
-void print_summary(const StrategyConfig &cfg)
-{
-    std::cout << "Config           : " << config_path() << std::endl;
-    std::cout << "Market           : " << cfg.market << std::endl;
-    std::cout << "Timeframe        : " << cfg.timeframe;
-    if (!cfg.htf.empty())
-    {
-        std::cout << "  (higher: " << cfg.htf << ")";
-    }
-    std::cout << std::endl;
-    std::cout << "Coins (" << cfg.nb_pairs() << ")       : ";
-    for (size_t i = 0; i < cfg.coins.size(); ++i)
-    {
-        std::cout << cfg.coins[i] << (i + 1 < cfg.coins.size() ? ", " : "");
-    }
-    std::cout << std::endl;
-}
-
 } // namespace backtest_config

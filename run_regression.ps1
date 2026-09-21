@@ -1,27 +1,12 @@
-# Thin Windows wrapper around run_regression.sh.
-#
-# The build and all numeric comparisons live in run_regression.sh so there is exactly
-# one source of truth; this script only translates the repo path into its WSL form and
-# forwards any arguments (e.g. -Rebaseline).
-#
-#   powershell -File .\run_regression.ps1
-#   powershell -File .\run_regression.ps1 -Rebaseline
-
-param(
-    [switch]$Rebaseline
-)
-
+# Windows entry point; builds and verification run in Docker Compose.
+param([ValidateSet("release", "debug", "asan", "tsan")][string]$Mode = "release")
 $ErrorActionPreference = "Stop"
-
-$RepoRoot = Split-Path -Parent $MyInvocation.MyCommand.Path
-$LinuxRepoRoot = "/mnt/" + $RepoRoot.Substring(0, 1).ToLower() + $RepoRoot.Substring(2).Replace("\", "/")
-
-$ScriptArgs = @("$LinuxRepoRoot/run_regression.sh")
-if ($Rebaseline) {
-    $ScriptArgs += "--rebaseline"
-}
-
-wsl -e bash @ScriptArgs
-if ($LASTEXITCODE -ne 0) {
-    throw "run_regression.sh failed with exit code $LASTEXITCODE"
-}
+Push-Location $PSScriptRoot
+try {
+    if ($Mode -in @("asan", "tsan")) {
+        docker compose -f compose.yaml -f compose.sanitizers.yaml run --build --rm -T backtest setarch x86_64 -R bash run_regression.sh $Mode
+    } else {
+        docker compose run --build --rm -T backtest bash run_regression.sh $Mode
+    }
+    if ($LASTEXITCODE -ne 0) { throw "Regression checks failed: $LASTEXITCODE" }
+} finally { Pop-Location }

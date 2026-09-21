@@ -1,298 +1,161 @@
-#!/usr/bin/env python3
-"""
-Unit tests for the pure parts of download_data.py -- no network access, so CI can run
-them on every push.
-
-    python3 -m unittest discover -s tools -v
-"""
-
+"""Repair tests exercise real assembly and persistence; only upstream transport is substituted."""
+import csv
+import hashlib
 import io
 import json
-import sys
+from pathlib import Path
+import subprocess
 import tempfile
 import unittest
+from unittest.mock import patch
 import zipfile
-from datetime import datetime, timezone
-from pathlib import Path
+import download_data as d
 
-sys.path.insert(0, str(Path(__file__).resolve().parent))
+BASE = 1704067200000
+STEP = 3600000
+ROWS = [[BASE+i*STEP,100+i,102+i,99+i,101+i,10] for i in range(6)]
 
-import download_data as dd  # noqa: E402
+def archive(rows):
+    text=io.StringIO();csv.writer(text).writerows(rows)
+    out=io.BytesIO()
+    with zipfile.ZipFile(out,"w") as z:z.writestr("candles.csv",text.getvalue())
+    return out.getvalue()
 
-
-class TestNormalizeMs(unittest.TestCase):
-    """
-    Binance switched the archive timestamp unit from milliseconds to microseconds with
-    the 2025-01 files. Getting this wrong put dates in the year 58595 and produced 14,261
-    spurious gaps in a single series, so it is pinned hard.
-    """
-
-    def test_milliseconds_pass_through(self):
-        # 2017-08-17 04:00 UTC, the first row of the tracked BTC 1h CSV.
-        self.assertEqual(dd.normalize_ms(1502942400000), 1502942400000)
-        # 2026-08-16, near the end of the archive.
-        self.assertEqual(dd.normalize_ms(1755300000000), 1755300000000)
-
-    def test_microseconds_converted(self):
-        # 2025-01-01 00:00 UTC as microseconds -> the same instant in milliseconds.
-        self.assertEqual(dd.normalize_ms(1735689600000000), 1735689600000)
-        self.assertEqual(dd.normalize_ms(1748736000000000), 1748736000000)
-
-    def test_both_units_agree_on_the_same_instant(self):
-        instant = datetime(2025, 6, 1, tzinfo=timezone.utc)
-        ms = int(instant.timestamp() * 1000)
-        us = ms * 1000
-        self.assertEqual(dd.normalize_ms(ms), dd.normalize_ms(us))
-
-    def test_threshold_has_headroom_either_side(self):
-        # Year 2100 in ms is still far below the threshold...
-        year_2100_ms = 4102444800000
-        self.assertEqual(dd.normalize_ms(year_2100_ms), year_2100_ms)
-        # ...and year 2000 in us is still far above it.
-        year_2000_us = 946684800000000
-        self.assertEqual(dd.normalize_ms(year_2000_us), 946684800000)
-
-
-class TestTrimNumber(unittest.TestCase):
-    """Output must match the trimmed form the tracked CSVs are stored in."""
-
-    def test_trailing_zeros_removed(self):
-        self.assertEqual(dd.trim_number("4261.48000000"), "4261.48")
-        self.assertEqual(dd.trim_number("47.18100900"), "47.181009")
-
-    def test_all_zero_decimals_collapse_to_int(self):
-        self.assertEqual(dd.trim_number("0.00000000"), "0")
-        self.assertEqual(dd.trim_number("10000.00000000"), "10000")
-
-    def test_integers_untouched(self):
-        self.assertEqual(dd.trim_number("1502942400000"), "1502942400000")
-
-    def test_no_precision_lost(self):
-        # Done on the string, so a value float() would round must survive intact.
-        self.assertEqual(dd.trim_number("0.000000012345678901"), "0.000000012345678901")
-
-    def test_negative(self):
-        self.assertEqual(dd.trim_number("-0.00003766"), "-0.00003766")
-
-
-class TestMonthRange(unittest.TestCase):
-    def test_spans_year_boundary(self):
-        months = dd.month_range("2024-11", datetime(2025, 2, 1, tzinfo=timezone.utc))
-        self.assertEqual(months, [(2024, 11), (2024, 12), (2025, 1)])
-
-    def test_end_is_exclusive(self):
-        months = dd.month_range("2024-01", datetime(2024, 1, 15, tzinfo=timezone.utc))
-        self.assertEqual(months, [])
-
-    def test_single_month(self):
-        months = dd.month_range("2024-01", datetime(2024, 2, 1, tzinfo=timezone.utc))
-        self.assertEqual(months, [(2024, 1)])
-
-
-class TestDaysInMonth(unittest.TestCase):
-    def test_lengths(self):
-        self.assertEqual(dd.days_in_month(2024, 1), 31)
-        self.assertEqual(dd.days_in_month(2024, 2), 29)  # leap year
-        self.assertEqual(dd.days_in_month(2023, 2), 28)
-        self.assertEqual(dd.days_in_month(2024, 4), 30)
-        self.assertEqual(dd.days_in_month(2024, 12), 31)
-
-
-def make_zip(rows, header=None):
-    buf = io.BytesIO()
-    lines = ([",".join(header)] if header else []) + [",".join(r) for r in rows]
-    with zipfile.ZipFile(buf, "w") as zf:
-        zf.writestr("data.csv", "\n".join(lines) + "\n")
-    return buf.getvalue()
-
-
-class TestRowsFromZip(unittest.TestCase):
-    """Newer archives carry a header row; older ones do not. Both must parse."""
-
-    KLINE = [["1502942400000", "1", "2", "3", "4", "5", "6", "7", "8", "9", "10", "11"],
-             ["1502946000000", "1", "2", "3", "4", "5", "6", "7", "8", "9", "10", "11"]]
-
-    def test_without_header(self):
-        rows = dd.rows_from_zip(make_zip(self.KLINE), 6)
-        self.assertEqual(len(rows), 2)
-
-    def test_with_header(self):
-        header = ["open_time", "open", "high", "low", "close", "volume",
-                  "close_time", "qav", "trades", "tbbav", "tbqav", "ignore"]
-        rows = dd.rows_from_zip(make_zip(self.KLINE, header), 6)
-        self.assertEqual(len(rows), 2)
-        self.assertEqual(rows[0][0], "1502942400000")
-
-    def test_short_rows_dropped(self):
-        rows = dd.rows_from_zip(make_zip([["123", "1"]]), 6)
-        self.assertEqual(rows, [])
-
-
-class TestWriters(unittest.TestCase):
-    """Output must be exactly what the C++ loaders in tools.cpp parse."""
-
+class RepairTests(unittest.TestCase):
     def setUp(self):
-        self.tmp = tempfile.TemporaryDirectory()
-        self.dir = Path(self.tmp.name)
+        self.temp=tempfile.TemporaryDirectory();self.addCleanup(self.temp.cleanup)
+        self.root=Path(self.temp.name)
+        self.cache=patch.object(d,"CACHE_DIR",self.root/"cache");self.cache.start();self.addCleanup(self.cache.stop)
 
-    def tearDown(self):
-        self.tmp.cleanup()
+    def source(self,url,timeout=60):
+        if url.endswith(".CHECKSUM"):
+            return (hashlib.sha256(archive(ROWS)).hexdigest()+"  candles.zip").encode()
+        if url.endswith(".zip"):
+            return archive(ROWS)
+        raise AssertionError("Unexpected network request: "+url)
 
-    def test_spot_csv_shape(self):
-        series = dd.Series([["1502942400000", "4261.48", "4313.62", "4261.32", "4308.83", "47.181009"]], [], 0)
-        out = self.dir / "BTC-USDT.csv"
-        dd.write_spot_csv(out, series)
-        lines = out.read_text().splitlines()
-        self.assertEqual(lines[0], "date,open,high,low,close,volume")
-        self.assertEqual(lines[1], "1502942400000,4261.48,4313.62,4261.32,4308.83,47.181009")
+    def test_missing_middle_is_downloaded_and_cpp_loader_reads_it(self):
+        path=d.kline_path(self.root,"spot","BTC","1h")
+        d.save_rows(path,{r[0]:r for r in ROWS if r[0]!=BASE+2*STEP})
+        with patch.object(d,"http_get",side_effect=self.source) as network:
+            result,rows=d.ensure_candles(self.root,"spot","BTC","1h",BASE,BASE+6*STEP)
+        self.assertTrue(network.called);self.assertEqual(rows,ROWS)
+        binary=d.ROOT/"build"/"release"/"verification_regression.exe"
+        output=json.loads(subprocess.check_output([str(binary),str(result)],text=True))
+        self.assertEqual(output["rows"],6);self.assertEqual(output["close_sum"],621)
 
-    def test_futures_json_shape(self):
-        series = dd.Series([["1567965300000", "10000", "10000", "10000", "10000", "0.002"]], [], 0)
-        out = self.dir / "f.json"
-        dd.write_futures_json(out, series)
-        rows = json.loads(out.read_text())
-        self.assertEqual(rows, [[1567965300000, 10000.0, 10000.0, 10000.0, 10000.0, 0.002]])
-        self.assertIsInstance(rows[0][0], int)  # timestamp must not become a float
+    def test_conflicting_downloaded_candles_fail_before_replacement(self):
+        path=d.kline_path(self.root,"spot","BTC","1h")
+        d.save_rows(path,{ROWS[0][0]:ROWS[0]})
+        original=path.read_bytes()
+        conflicting=list(ROWS[1]);conflicting[4]+=0.5
+        blob=archive(ROWS+[conflicting])
+        def source(url,timeout=60):
+            return (hashlib.sha256(blob).hexdigest()+" x").encode() if url.endswith(".CHECKSUM") else blob
+        with patch.object(d,"http_get",side_effect=source):
+            with self.assertRaisesRegex(d.DownloadError,"Conflicting duplicate"):
+                d.ensure_candles(self.root,"spot","BTC","1h",BASE,BASE+6*STEP)
+        self.assertEqual(path.read_bytes(),original)
 
-    def test_funding_json_is_six_elements(self):
-        # freqtrade's shape: the loader reads [0] and [1], the zeros keep it compatible.
-        series = dd.Series([["1660464000000", "-0.00000333"]], [], 0)
-        out = self.dir / "fr.json"
-        dd.write_funding_json(out, series)
-        rows = json.loads(out.read_text())
-        self.assertEqual(len(rows[0]), 6)
-        self.assertEqual(rows[0][0], 1660464000000)
-        self.assertAlmostEqual(rows[0][1], -0.00000333)
-        self.assertEqual(rows[0][2:], [0.0, 0.0, 0.0, 0.0])
+    def test_rest_repairs_archive_hole(self):
+        def source(url,timeout=60):
+            blob=archive([r for i,r in enumerate(ROWS) if i!=3])
+            if url.endswith(".CHECKSUM"):return (hashlib.sha256(blob).hexdigest()+" x").encode()
+            if url.endswith(".zip"):return blob
+            if "/klines?" in url:return json.dumps([ROWS[3]]).encode()
+            raise AssertionError(url)
+        with patch.object(d,"http_get",side_effect=source):
+            _,rows=d.ensure_candles(self.root,"futures","BTC","1h",BASE,BASE+6*STEP)
+        self.assertEqual(rows,ROWS)
 
-    def test_write_is_atomic(self):
-        out = self.dir / "sub" / "x.csv"
-        dd.write_atomic(out, "hello\n")
-        self.assertEqual(out.read_text(), "hello\n")
-        self.assertFalse(out.with_suffix(".csv.tmp").exists())
+    def test_unavailable_hole_fails_after_attempt(self):
+        def source(url,timeout=60):
+            if "/klines?" in url:return b"[]"
+            raise FileNotFoundError(url)
+        with patch.object(d,"http_get",side_effect=source) as network:
+            with self.assertRaisesRegex(d.DownloadError,"unresolved gap"):
+                d.ensure_candles(self.root,"spot","BTC","1h",BASE,BASE+STEP)
+        self.assertTrue(network.called)
 
+    def test_complete_data_uses_no_network_and_offline_holes_fail(self):
+        path=d.kline_path(self.root,"spot","BTC","1h");d.save_rows(path,{r[0]:r for r in ROWS})
+        with patch.object(d,"http_get",side_effect=AssertionError("network")):
+            _,rows=d.ensure_candles(self.root,"spot","BTC","1h",BASE,BASE+6*STEP,True)
+            self.assertEqual(rows,ROWS)
+            with self.assertRaises(d.DownloadError):
+                d.ensure_candles(self.root,"spot","BTC","1h",BASE,BASE+7*STEP,True)
 
-class TestGapDetection(unittest.TestCase):
-    def test_contiguous_series_has_no_gaps(self):
-        step = dd.TIMEFRAME_MS["1h"]
-        times = [1502942400000 + i * step for i in range(10)]
-        self.assertEqual(dd.count_gaps(times, "1h"), 0)
+    def test_corrupt_zip_is_replaced_not_trusted(self):
+        path=self.root/"cache.zip";path.write_bytes(b"broken");path.with_suffix(".sha256").write_text("0"*64)
+        with patch.object(d,"http_get",side_effect=self.source):
+            blob=d.fetch_zip("https://archive/test.zip",path)
+        self.assertEqual(d.zip_rows(blob),[[str(x) for x in r] for r in ROWS])
 
-    def test_missing_candle_counted(self):
-        step = dd.TIMEFRAME_MS["1h"]
-        times = [1502942400000 + i * step for i in range(10)]
-        del times[5]
-        self.assertEqual(dd.count_gaps(times, "1h"), 1)
+    def test_atomic_failure_preserves_existing_file(self):
+        path=self.root/"existing";path.write_text("good")
+        with patch.object(d.os,"replace",side_effect=OSError("interrupted")):
+            with self.assertRaises(OSError):d.write_atomic(path,"new")
+        self.assertEqual(path.read_text(),"good");self.assertFalse(list(self.root.glob("*.tmp")))
 
-    def test_unknown_timeframe_is_not_an_error(self):
-        self.assertEqual(dd.count_gaps([1, 2, 3], "7m"), 0)
+    def test_invalid_rows_and_duplicate_conflicts_rejected(self):
+        bad=list(ROWS[0]);bad[2]=90
+        with self.assertRaises(d.DownloadError):d.validate_row(bad,STEP)
+        bad=list(ROWS[0]);bad[4]=float("nan")
+        with self.assertRaises(d.DownloadError):d.validate_row(bad,STEP)
+        path=self.root/"test.csv";path.write_text("date,open,high,low,close,volume\n"+
+            ",".join(map(str,ROWS[0]))+"\n"+",".join(map(str,[BASE,200,202,199,201,10]))+"\n")
+        with self.assertRaises(d.DownloadError):d.read_rows(path,STEP)
+        micro=list(ROWS[0]);micro[0]*=1000
+        self.assertEqual(d.validate_row(micro,STEP),ROWS[0])
 
+    def test_funding_variable_intervals_and_deleted_record_repair(self):
+        source=[dict(fundingTime=BASE+i*STEP,fundingRate="0.001",markPrice="110") for i in (0,4,6)]
+        with patch.object(d,"fetch_zip",return_value=None), patch.object(d,"http_get",side_effect=[json.dumps(source).encode(),b"[]"]):
+            path,events=d.ensure_funding(self.root,"BTC",BASE,BASE+8*STEP)
+        self.assertEqual([e["timestamp_ms"] for e in events],[BASE,BASE+4*STEP,BASE+6*STEP])
+        ledger=json.loads(path.read_text());ledger["events"].pop(1);path.write_text(json.dumps(ledger))
+        with self.assertRaises(d.DownloadError):d.ensure_funding(self.root,"BTC",BASE,BASE+8*STEP,True)
+        with patch.object(d,"fetch_zip",return_value=None), patch.object(d,"http_get",side_effect=[json.dumps(source).encode(),b"[]"]) as network:
+            _,events=d.ensure_funding(self.root,"BTC",BASE,BASE+8*STEP)
+        self.assertTrue(network.called);self.assertEqual(len(events),3)
 
-class TestJobPaths(unittest.TestCase):
-    """Paths must land exactly where the strategies look."""
+    def test_funding_archive_repairs_missing_rest_event(self):
+        blob=archive([[BASE,4,0.001],[BASE+4*STEP,4,0.002]])
+        page=[dict(fundingTime=BASE,fundingRate="0.001",markPrice="100")]
+        with patch.object(d,"fetch_zip",return_value=blob), patch.object(d,"http_get",
+                side_effect=[json.dumps(page).encode(),b"[]",json.dumps([[BASE+4*STEP,110]]).encode()]):
+            _,events=d.ensure_funding(self.root,"BTC",BASE,BASE+8*STEP)
+        self.assertEqual(events[1],dict(timestamp_ms=BASE+4*STEP,rate=0.002,mark_price=110,interval_hours=4))
 
-    def test_output_paths(self):
-        data = Path("/data")
-        self.assertEqual(dd.Job("spot", "BTC", "1h").output(data),
-                         data / "binance/1h/BTC-USDT.csv")
-        self.assertEqual(dd.Job("futures", "ETH", "5m").output(data),
-                         data / "futures/ETH_USDT-5m-futures.json")
-        self.assertEqual(dd.Job("funding", "BTC", "8h").output(data),
-                         data / "futures/BTC_USDT-8h-funding_rate.json")
+    def test_off_boundary_funding_fetches_finer_execution_candles(self):
+        cfg=dict(data_dir=str(self.root), coins=["BTC"],
+            strategies={"study":dict(market="futures",timeframe="4h")},
+            run=dict(start="2024-01-01",end="2024-01-01T08:00:00"))
+        path=self.root/"config.json";path.write_text(json.dumps(cfg))
+        def source(url,timeout=60):
+            if "/fundingRate/" in url:
+                raise FileNotFoundError(url)
+            if "/fundingRate?" in url:
+                cursor=int(d.urllib.parse.parse_qs(d.urllib.parse.urlparse(url).query)["startTime"][0])
+                return json.dumps([dict(fundingTime=BASE+i*STEP,fundingRate="0.001",markPrice="100")
+                    for i in (1,5) if BASE+i*STEP>=cursor]).encode()
+            tf=url.split("/")[-2]
+            step=d.TIMEFRAME_MS[tf]
+            rows=[[ts,100,101,99,100,10] for ts in range(BASE,BASE+8*STEP,step)]
+            blob=archive(rows)
+            return (hashlib.sha256(blob).hexdigest()+" candles.zip").encode() if url.endswith(".CHECKSUM") else blob
+        with patch.object(d,"http_get",side_effect=source):
+            manifest=d.ensure_strategy(path,"study")
+        self.assertEqual(manifest["signal_seconds"],14400)
+        self.assertEqual(manifest["execution_seconds"],3600)
+        rows=d.read_rows(manifest["execution_files"][0],STEP)
+        self.assertEqual(len(rows),8)
+        self.assertEqual(sum(r[4] for r in rows.values()),800)
 
-    def test_symbol(self):
-        self.assertEqual(dd.Job("spot", "BTC", "1h").symbol, "BTCUSDT")
+    def test_funding_missing_period_fails(self):
+        with patch.object(d,"fetch_zip",return_value=None), patch.object(d,"http_get",return_value=b"[]"):
+            with self.assertRaisesRegex(d.DownloadError,"unresolved interval"):
+                d.ensure_funding(self.root,"BTC",BASE,BASE+24*STEP)
 
-
-class TestArchiveUrls(unittest.TestCase):
-    def test_spot_monthly(self):
-        url = dd.archive_url("spot", "BTCUSDT", "klines", "1h", 2024, 3)
-        self.assertTrue(url.endswith("/data/spot/monthly/klines/BTCUSDT/1h/BTCUSDT-1h-2024-03.zip"))
-
-    def test_futures_monthly(self):
-        url = dd.archive_url("futures", "ETHUSDT", "klines", "5m", 2024, 12)
-        self.assertTrue(url.endswith("/data/futures/um/monthly/klines/ETHUSDT/5m/ETHUSDT-5m-2024-12.zip"))
-
-    def test_funding_monthly(self):
-        url = dd.archive_url("futures", "BTCUSDT", "fundingRate", "", 2023, 1)
-        self.assertTrue(url.endswith("/data/futures/um/monthly/fundingRate/BTCUSDT/BTCUSDT-fundingRate-2023-01.zip"))
-
-    def test_daily_variant(self):
-        url = dd.archive_url("spot", "BTCUSDT", "klines", "1h", 2026, 8, day=5)
-        self.assertIn("/daily/", url)
-        self.assertTrue(url.endswith("BTCUSDT-1h-2026-08-05.zip"))
-
-
-class TestJobsFromConfig(unittest.TestCase):
-    def test_derives_every_series_a_strategy_needs(self):
-        cfg = {
-            "coins": ["BTC", "ETH"],
-            "strategies": {
-                "A": {"market": "spot", "timeframe": "1h"},
-                "B": {"market": "futures", "timeframe": "5m", "htf": "1h"},
-            },
-        }
-        jobs = dd.jobs_from_config(cfg)
-        got = {(j.market, j.coin, j.timeframe) for j in jobs}
-        self.assertIn(("spot", "BTC", "1h"), got)
-        self.assertIn(("futures", "ETH", "5m"), got)
-        self.assertIn(("futures", "BTC", "1h"), got)   # the htf
-        self.assertIn(("funding", "BTC", "8h"), got)   # futures implies funding
-        self.assertNotIn(("funding", "BTC", "1h"), got)
-
-    def test_no_duplicates(self):
-        cfg = {
-            "coins": ["BTC"],
-            "strategies": {
-                "A": {"market": "spot", "timeframe": "1h"},
-                "B": {"market": "spot", "timeframe": "1h"},
-            },
-        }
-        self.assertEqual(len(dd.jobs_from_config(cfg)), 1)
-
-
-class TestFixtureGuard(unittest.TestCase):
-    """
-    Binance restates historical spot klines, so re-downloading the files the regression
-    fixtures are computed from would silently shift them.
-    """
-
-    def test_pinned_files_recognised(self):
-        data = Path("/data")
-        self.assertTrue(dd.is_fixture_pinned(dd.Job("spot", "BTC", "1h"), data))
-        self.assertTrue(dd.is_fixture_pinned(dd.Job("futures", "BTC", "1h"), data))
-        self.assertTrue(dd.is_fixture_pinned(dd.Job("funding", "BTC", "8h"), data))
-
-    def test_other_files_not_pinned(self):
-        data = Path("/data")
-        self.assertFalse(dd.is_fixture_pinned(dd.Job("spot", "BTC", "5m"), data))
-        self.assertFalse(dd.is_fixture_pinned(dd.Job("spot", "ETH", "4h"), data))
-
-
-class TestRealConfig(unittest.TestCase):
-    """The shipped config must stay loadable and self-consistent."""
-
-    def setUp(self):
-        self.cfg = dd.load_config(dd.DEFAULT_CONFIG)
-
-    def test_has_coins_and_strategies(self):
-        self.assertTrue(self.cfg["coins"])
-        self.assertTrue(self.cfg["strategies"])
-
-    def test_no_delisted_symbols(self):
-        # These have no USDT-M perpetual, so their data cannot be downloaded at all.
-        for dead in ("MATIC", "XMR", "EOS", "POL"):
-            self.assertNotIn(dead, self.cfg["coins"],
-                             f"{dead} is not listed on Binance USDT-M futures")
-
-    def test_every_strategy_has_a_market_and_timeframe(self):
-        for name, entry in self.cfg["strategies"].items():
-            self.assertIn(entry.get("market"), ("spot", "futures"), name)
-            self.assertTrue(entry.get("timeframe"), name)
-
-    def test_jobs_derive_cleanly(self):
-        self.assertTrue(dd.jobs_from_config(self.cfg))
-
-
-if __name__ == "__main__":
-    unittest.main(verbosity=2)
+if __name__=="__main__":
+    unittest.main()

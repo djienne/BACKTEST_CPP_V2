@@ -1,10 +1,10 @@
-# Style matches the existing code: Allman braces, 4-space indent, no column cap.
+# Allman braces, four-space indent, and readable strategy lambdas.
 # Not applied repo-wide in this repo — committed so new edits stay consistent.
 BasedOnStyle: LLVM
 IndentWidth: 4
 TabWidth: 4
 UseTab: Never
-ColumnLimit: 0
+ColumnLimit: 120
 BreakBeforeBraces: Allman
 AccessModifierOffset: -4
 NamespaceIndentation: None
@@ -15,3 +15,5 @@ AllowShortFunctionsOnASingleLine: Empty
 PointerAlignment: Right
 SpaceAfterTemplateKeyword: true
 Cpp11BracedListStyle: true
+AllowShortLambdasOnASingleLine: None
+LambdaBodyIndentation: OuterScope

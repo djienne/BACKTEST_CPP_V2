@@ -1,237 +1,375 @@
 #pragma once
-
-#include <algorithm>
-#include <chrono>
-#include <cmath>
+#include "trade_core.hh"
+#include "indicators.hh"
 #include <functional>
-#include <iostream>
-#include <limits>
-#include <string>
-#include <vector>
+#include <future>
+#include <numeric>
+#include <unordered_set>
+#ifndef BACKTEST_REVISION
+#define BACKTEST_REVISION "unknown"
+#endif
 
-#include "custom_talib_wrapper.hh"
-#include "tools.hh"
-#include <ta-lib/ta_libc.h>
-
-// Shared plumbing for parameter-sweep strategies. Strategy files now only own:
-//   - their signal logic (the PROCESS lambda passed to sweep())
-//   - their indicator precomputation (CALCULATE_INDICATORS)
-//   - their parameter ranges
-// Everything else — TA-Lib init, banner, result printing, the best-tracking loop,
-// the periodic output cadence, the final report — lives here.
-//
-// This header stays header-only: sweep() is a template and everything else is a
-// short free function. No extra Makefile target needed.
 namespace strategy_runner
 {
-struct SweepConfig
+using Params = std::vector<double>;
+using Column = std::array<const std::vector<float> *, backtest_config::MAX_PAIRS>;
+struct Axis
 {
-    std::string strategy_name;
-    std::string out_filename;
-    uint min_trades = 100;
-    float min_dd = -40.0f;            // keep if res.max_DD > min_dd (closer to zero wins)
-    float min_reasonable_gain = 0.0f; // reject tiny or negative gains
-    float max_reasonable_gain = 1.0e6f;
-    uint print_every = 1000;
-
-    // Shuffle the parameter list before sweeping, so an interrupted run has still
-    // sampled the whole space rather than a prefix of it.
-    //
-    // Set false when the caller has already ordered the list deliberately -- typically
-    // to group parameters that share an expensive indicator, so a strategy can cache
-    // that indicator for one group at a time instead of accumulating every
-    // combination. BigWill does exactly this for its Awesome Oscillator.
-    bool shuffle = true;
+    std::string name;
+    std::vector<double> values;
+    template <class T> Axis(std::string n, const std::vector<T> &v) : name(std::move(n)), values(v.begin(), v.end()) {}
 };
-
-// First bar index at which every listed indicator holds a real value rather than warmup
-// padding, and at which the pair's own history has begun.
-//
-// Indicator series are left-padded with zeros through their warmup (see indicators.hh),
-// so a loop that starts too early compares prices against zeros -- which silently
-// produces trades rather than an error. Strategies traditionally hard-coded a constant
-// (600) that happened to exceed the warmups in use; this derives it instead, so raising
-// an indicator period cannot quietly outgrow it.
-//
-//   const uint ii_begin = strategy_runner::first_tradable_index({warm_ema, warm_atr},
-//                                                               start_indexes[0],
-//                                                               1); // reads [ii - 1]
-//
-// `extra_lookback` covers strategies that read backwards from the current bar.
-inline uint first_tradable_index(const std::initializer_list<size_t> indicator_warmups,
-                                 const uint data_start_index = 0,
-                                 const uint extra_lookback = 0)
+struct Selection
 {
-    size_t worst = 0;
-    for (const size_t w : indicator_warmups)
-    {
-        worst = std::max(worst, w);
-    }
-    return std::max(static_cast<uint>(worst), data_start_index) + extra_lookback;
-}
-
+    uint min_trades = 100;
+    double min_dd = -40, min_gain = 0, max_gain = 1e6;
+};
 inline void init_talib()
 {
-    const TA_RetCode ret = TA_Initialize();
-    if (ret != TA_SUCCESS)
-    {
-        std::cout << "Cannot initialize TA-Lib !\n"
-                  << ret << "\n";
-    }
-    else
-    {
-        std::cout << "Initialized TA-Lib !\n";
-    }
+    if (TA_Initialize() != TA_SUCCESS)
+        throw std::runtime_error("TA-Lib initialization failed");
 }
-
-inline std::vector<std::string> build_spot_datafile_paths(const std::vector<std::string> &coins, const std::string &timeframe)
+// The cache owns series; Columns keep stable references outside the bar loop.
+struct Indicators
 {
-    std::vector<std::string> out;
-    out.reserve(coins.size());
-    for (const std::string &coin : coins)
+    const MarketData &data;
+    std::vector<IndicatorCache> &cache;
+    size_t ready = 0;
+    template <class Compute> Column get(const std::string &key, Compute compute, bool higher = false)
     {
-        out.push_back("./data/data/binance/" + timeframe + "/" + coin + "-USDT.csv");
-    }
-    return out;
-}
-
-inline void print_date_range(const KLINEf &reference)
-{
-    if (reference.nb == 0)
-    {
-        return;
-    }
-    const uint last_idx = reference.nb - 1;
-    const int y0 = get_year_from_timestamp(reference.timestamp[0]);
-    const int m0 = get_month_from_timestamp(reference.timestamp[0]);
-    const int d0 = get_day_from_timestamp(reference.timestamp[0]);
-    const int y1 = get_year_from_timestamp(reference.timestamp[last_idx]);
-    const int m1 = get_month_from_timestamp(reference.timestamp[last_idx]);
-    const int d1 = get_day_from_timestamp(reference.timestamp[last_idx]);
-    const std::time_t difference = std::abs(reference.timestamp[last_idx] - reference.timestamp[0]);
-    const int days = difference / (24 * 60 * 60);
-    std::cout << "Begin day      : " << y0 << "/" << m0 << "/" << d0 << std::endl;
-    std::cout << "End day        : " << y1 << "/" << m1 << "/" << d1 << std::endl;
-    std::cout << "Number of days : " << YELLOW << days << RESET << std::endl;
-}
-
-inline void print_banner(const std::string &name, const std::vector<std::string> &datafiles,
-                         const KLINEf &reference, float fee, uint min_trades, float min_dd)
-{
-    std::cout << "\n--------------------------------------------------------------------------" << std::endl;
-    std::cout << "Strategy to test: " << BLUE << name << RESET << std::endl;
-    std::cout << "DATA FILES TO PROCESS: " << std::endl;
-    for (const std::string &f : datafiles)
-    {
-        std::cout << "  " << YELLOW << f << RESET << std::endl;
-    }
-    print_date_range(reference);
-    std::cout << "OPEN/CLOSE FEE : " << fee << " %" << std::endl;
-    std::cout << "Minimum number of trades required    : " << min_trades << std::endl;
-    std::cout << "Maximum drawback (=drawdown) allowed : " << min_dd << " %" << std::endl;
-    std::cout << "--------------------------------------------------------------------------" << std::endl;
-}
-
-inline void print_best_res(const std::string &name, const RUN_RESULTf &r)
-{
-    std::cout << "\n--------------------------------------------------------------------------" << std::endl;
-    std::cout << "BEST PARAMETER SET FOUND: " << std::endl;
-    std::cout << "--------------------------------------------------------------------------" << std::endl;
-    std::cout << "Time             : " << GREY << GET_CURRENT_TIME_STR() << RESET << std::endl;
-    std::cout << "Strategy         : " << BLUE << name << RESET << std::endl;
-    std::cout << "Parameters       : " << YELLOW << r.param_str << RESET << std::endl;
-    std::cout << "Max Open Trades  : " << YELLOW << r.max_open_trades << RESET << std::endl;
-    std::cout << "Gain             : " << r.gain_pc << "%" << std::endl;
-    std::cout << "Porfolio         : " << r.WALLET_VAL_USDT << "$ (started with 1000$)" << std::endl;
-    std::cout << "Win rate         : " << r.win_rate << "%" << std::endl;
-    std::cout << "max DD           : " << r.max_DD << "%" << std::endl;
-    std::cout << "Gain/DDC         : " << r.gain_over_DDC << std::endl;
-    std::cout << "Score            : " << GREEN << r.score << RESET << std::endl;
-    std::cout << "Calmar ratio     : " << r.calmar_ratio << std::endl;
-    if (r.calmar_ratio_monthly != 0.0f)
-    {
-        std::cout << "Calmar monthly   : " << r.calmar_ratio_monthly << std::endl;
-    }
-    std::cout << "Number of trades : " << r.nb_posi_entered << std::endl;
-    std::cout << "Total fees paid  : " << std::round(r.total_fees_paid * 100.0f) / 100.0f << "$ (started with 1000$)" << std::endl;
-    std::cout << "--------------------------------------------------------------------------" << std::endl;
-}
-
-inline void print_timing_and_ram(double t_begin, uint nb_tested)
-{
-    const double t_end = get_wall_time();
-    std::cout << "Number of backtests performed : " << nb_tested << std::endl;
-    std::cout << "Time taken                    : " << t_end - t_begin << " seconds " << std::endl;
-    const double ram_usage = process_mem_usage();
-    std::cout << "RAM usage                     : " << std::round(ram_usage * 10.0) / 10.0 << " MB" << std::endl;
-    std::cout << "--------------------------------------------------------------------------" << std::endl;
-}
-
-// Runs a parameter sweep. `process_fn` is called once per parameter; `print_fn`
-// customizes result-printing (default matches the canonical multi-pair format).
-//
-// `params` is taken by value because it is shuffled in place, so callers should
-// std::move() their list in -- BigWill's is around 5.7 million entries and copying it
-// cost over 100 MB of pointless allocation and memcpy per run.
-//
-// Single-threaded by design, for now. process_fn typically populates each pair's
-// IndicatorCache lazily on first sight of a parameter combination (see BigWill), so
-// parallelising this loop needs that cache made thread-safe first. The lazy caching is
-// worth far more than the core count: it removes a redundancy factor in the thousands,
-// where threading would give at most the number of cores.
-template <typename ParamsT, typename ProcessFn,
-          typename PrintFn = std::function<void(const RUN_RESULTf &)>>
-RUN_RESULTf sweep(const SweepConfig &cfg, std::vector<ParamsT> params, ProcessFn process_fn,
-                  PrintFn print_fn = nullptr)
-{
-    auto do_print = [&](const RUN_RESULTf &r) {
-        if (print_fn)
+        Column out{};
+        for (size_t p = 0; p < data.signal.size(); ++p)
         {
-            print_fn(r);
+            auto &c = cache[p];
+            if (!c.has(key))
+            {
+                size_t warm = 0;
+                auto values = compute(higher ? data.higher.at(p) : data.signal[p], warm);
+                if (higher)
+                {
+                    warm = data.higher_offset[p] + (warm + 1) * data.higher_ratio - 1;
+                    values = PROJECT_HTF_TO_LTF(values, data.higher_ratio, data.signal[p].nb, data.higher_offset[p], 0);
+                }
+                c.put(key, std::move(values), warm);
+            }
+            out[p] = &c.get(key);
+            ready = std::max(ready, c.first_valid(key));
         }
-        else
-        {
-            print_best_res(cfg.strategy_name, r);
-        }
-    };
-
-    if (cfg.shuffle)
-    {
-        random_shuffle_vector(params);
+        return out;
     }
-
-    RUN_RESULTf best{};
-    best.score = -std::numeric_limits<float>::infinity();
-    best.gain_over_DDC = -100.0f;
-    best.calmar_ratio = -100.0f;
-
-    uint nb_done = 0;
-    uint tick = 0;
-    for (const ParamsT &p : params)
+    Column ema(int n, bool higher = false)
     {
-        const RUN_RESULTf res = process_fn(p);
-        ++nb_done;
-        ++tick;
-
-        if (res.score > best.score && res.gain_pc > cfg.min_reasonable_gain &&
-            res.gain_pc < cfg.max_reasonable_gain &&
-            res.nb_posi_entered >= int(cfg.min_trades) && res.max_DD > cfg.min_dd)
-        {
-            best = res;
-        }
-
-        if (tick >= cfg.print_every)
-        {
-            tick = 0;
-            do_print(best);
-            WRITE_OR_UPDATE_BEST_SCORE_FILE(cfg.strategy_name, cfg.out_filename, best);
-            const float pc_done = std::round(float(nb_done) / float(params.size()) * 100.0f * 100.0f) / 100.0f;
-            std::cout << "DONE " << nb_done << " / " << params.size() << "   = " << pc_done << "%" << std::endl;
-        }
+        return get(
+            IndicatorCache::key(higher ? "EMA_HTF" : "EMA", n),
+            [=](const KLINEf &k, size_t &w)
+            {
+            return TALIB_EMA(k.close, n, &w);
+            },
+            higher);
     }
-
-    do_print(best);
-    WRITE_OR_UPDATE_BEST_SCORE_FILE(cfg.strategy_name, cfg.out_filename, best);
-    return best;
+    Column rsi(int n)
+    {
+        return get(IndicatorCache::key("RSI", n),
+                   [=](const KLINEf &k, size_t &w)
+                   {
+            return TALIB_RSI(k.close, n, &w);
+        });
+    }
+    Column atr(int n = 14)
+    {
+        return get(IndicatorCache::key("ATR", n),
+                   [=](const KLINEf &k, size_t &w)
+                   {
+            return TALIB_ATR(k.high, k.low, k.close, n, &w);
+        });
+    }
+    Column will()
+    {
+        return get("WILLR:14",
+                   [](const KLINEf &k, size_t &w)
+                   {
+            return TALIB_WILLR(k.high, k.low, k.close, 14, &w);
+        });
+    }
+    Column srsi(int smooth = 0)
+    {
+        return get(IndicatorCache::key("SRSI", smooth),
+                   [=](const KLINEf &k, size_t &w)
+                   {
+            w = 27 + (smooth == 0 ? 0 : smooth == 1 ? 2 : 4);
+            return smooth == 0   ? TALIB_STOCHRSI_not_averaged(k.close, 14, 14)
+                   : smooth == 1 ? TALIB_STOCHRSI_K(k.close, 14, 14, 3, 3)
+                                 : TALIB_STOCHRSI_D(k.close, 14, 14, 3, 3);
+        });
+    }
+    Column ao(int fast, int slow)
+    {
+        return get(IndicatorCache::key("AO", fast, slow),
+                   [=](const KLINEf &k, size_t &w)
+                   {
+            w = static_cast<size_t>(std::max(fast, slow) - 1);
+            return TALIB_AO(k.high, k.low, fast, slow);
+        });
+    }
+    Column trix(int length, int smooth)
+    {
+        return get(IndicatorCache::key("TRIX", length, smooth),
+                   [=](const KLINEf &k, size_t &w)
+                   {
+            w = 3 * (length - 1) + smooth;
+            return TALIB_TRIX(k.close, length, smooth);
+        });
+    }
+    Column supertrend(int period, float mult, bool higher = false)
+    {
+        return get(
+            IndicatorCache::key(higher ? "ST_HTF" : "ST", period, mult),
+            [=](const KLINEf &k, size_t &w)
+            {
+            auto s = TALIB_SuperTrend(k.high, k.low, k.close, period, mult);
+            w = s.warmup;
+            return std::vector<float>(s.supertrend.begin(), s.supertrend.end());
+            },
+            higher);
+    }
+    std::array<Column, 3> bands(int length, float dev)
+    {
+        std::array<Column, 3> out{};
+        const std::string base = IndicatorCache::key("BB", length, dev);
+        for (size_t p = 0; p < data.signal.size(); ++p)
+        {
+            auto &c = cache[p];
+            if (!c.has(base + ":0"))
+            {
+                auto b = TALIB_BBANDS_R(data.signal[p].close, dev, dev, length);
+                c.put(base + ":0", std::move(b.upper), b.warmup);
+                c.put(base + ":1", std::move(b.middle), b.warmup);
+                c.put(base + ":2", std::move(b.lower), b.warmup);
+            }
+            for (int k = 0; k < 3; ++k)
+            {
+                const auto key = base + ":" + std::to_string(k);
+                out[k][p] = &c.get(key);
+                ready = std::max(ready, c.first_valid(key));
+            }
+        }
+        return out;
+    }
+};
+template <class Valid>
+std::vector<Params> sample(const std::vector<Axis> &axes, uint64_t budget, uint64_t seed, Valid valid)
+{
+    uint64_t count = 1;
+    for (const auto &a : axes)
+    {
+        if (a.values.empty() || count > std::numeric_limits<uint64_t>::max() / a.values.size())
+            throw std::runtime_error("Invalid parameter grid");
+        count *= a.values.size();
+    }
+    // Explicit exhaustive mode is bounded by memory. Above this ceiling use a trial
+    // budget; a streaming grid would be the next step if a real study needs it.
+    if (!budget && count > 10000000)
+        throw std::runtime_error("Exhaustive grid exceeds 10 million combinations; set max_trials");
+    std::vector<Params> result;
+    std::mt19937_64 rng(seed);
+    std::unordered_set<uint64_t> seen;
+    const uint64_t wanted = budget ? std::min(budget, count) : count;
+    for (uint64_t visits = 0; seen.size() < count && result.size() < wanted;)
+    {
+        uint64_t index = budget ? std::uniform_int_distribution<uint64_t>(0, count - 1)(rng) : visits++;
+        if (!seen.insert(index).second)
+            continue;
+        Params p;
+        for (const auto &a : axes)
+        {
+            p.push_back(a.values[index % a.values.size()]);
+            index /= a.values.size();
+        }
+        if (valid(p))
+            result.push_back(std::move(p));
+    }
+    if (result.empty())
+        throw std::runtime_error("No valid parameter combinations");
+    return result;
+}
+inline nlohmann::json result_json(const RUN_RESULTf &r)
+{
+    nlohmann::json j = {{"valid", r.valid},
+                        {"invalid_reason", r.invalid_reason},
+                        {"wallet", r.WALLET_VAL_USDT},
+                        {"gain_percent", r.gain_pc},
+                        {"win_rate_percent", r.win_rate},
+                        {"max_drawdown_percent", r.max_DD},
+                        {"score", r.score},
+                        {"trades", r.nb_posi_entered},
+                        {"commissions", r.total_fees_paid},
+                        {"net_funding_paid", r.net_funding},
+                        {"ambiguous_bars", r.ambiguous_bars}};
+    j["calmar"] = r.calmar_ratio ? nlohmann::json(*r.calmar_ratio) : nlohmann::json(nullptr);
+    j["fills"] = nlohmann::json::array();
+    for (const auto &f : r.fills)
+        j["fills"].push_back({{"timestamp", f.timestamp},
+                              {"pair", f.pair},
+                              {"action", f.action},
+                              {"price", f.price},
+                              {"quantity", f.quantity},
+                              {"commission", f.commission},
+                              {"net_pnl", f.net_pnl}});
+    j["equity"] = r.equity;
+    j["equity_times"] = r.equity_times;
+    return j;
+}
+inline bool qualifies(const RUN_RESULTf &r, const Selection &s)
+{
+    return r.valid && std::isfinite(r.score) && r.gain_pc > s.min_gain && r.gain_pc < s.max_gain &&
+           r.nb_posi_entered >= static_cast<int>(s.min_trades) && r.max_DD > s.min_dd;
+}
+template <class Evaluate>
+nlohmann::json evaluate_search(const MarketData &data, const backtest_config::StrategyConfig &cfg,
+                               const std::vector<Params> &params, const Selection &selection, Evaluate evaluate)
+{
+    const size_t n = data.execution[0].nb;
+    const size_t split = static_cast<size_t>(std::floor(n * (1 - cfg.holdout_fraction)));
+    if (!split || split >= n)
+        throw std::runtime_error("Insufficient evaluation bars for holdout");
+    std::vector<RUN_RESULTf> results(params.size());
+    std::vector<std::future<void>> workers;
+    for (unsigned worker = 0; worker < cfg.workers; ++worker)
+        workers.push_back(std::async(std::launch::async,
+                                     [&, worker]
+                                     {
+            std::vector<IndicatorCache> cache(data.signal.size());
+            for (size_t k = worker; k < params.size(); k += cfg.workers)
+            {
+                for (auto &c : cache)
+                    c.begin_trial();
+                results[k] = evaluate(data, cache, params[k], trade_core::Window{0, split}, false);
+                for (auto &c : cache)
+                    c.discard_unused();
+            }
+        }));
+    for (auto &worker : workers)
+        worker.get();
+    size_t winner = params.size();
+    for (size_t i = 0; i < results.size(); ++i)
+        if (qualifies(results[i], selection) && (winner == params.size() || results[i].score > results[winner].score))
+            winner = i;
+    nlohmann::json report = {{"status", winner == params.size() ? "no_eligible_candidate" : "complete"},
+                             {"trials", params.size()},
+                             {"seed", cfg.seed},
+                             {"split_timestamp", data.execution[0].timestamp[split]},
+                             {"data", data.provenance},
+                             {"selection",
+                              {{"min_trades", selection.min_trades},
+                               {"min_drawdown", selection.min_dd},
+                               {"min_gain", selection.min_gain},
+                               {"max_gain", selection.max_gain}}},
+                             {"invalid_candidates", std::count_if(results.begin(), results.end(),
+                                                                  [](const auto &r)
+                                                                  {
+        return !r.valid;
+                              })},
+                             {"max_training_trades", std::max_element(results.begin(), results.end(),
+                                                                      [](const auto &a, const auto &b)
+                                                                      {
+        return a.nb_posi_entered < b.nb_posi_entered;
+                                                     })->nb_posi_entered}};
+    if (winner != params.size())
+    {
+        std::vector<IndicatorCache> cache(data.signal.size());
+        report["parameters"] = params[winner];
+        report["training"] = result_json(evaluate(data, cache, params[winner], trade_core::Window{0, split}, true));
+        report["holdout"] = result_json(evaluate(data, cache, params[winner], trade_core::Window{split, n}, true));
+    }
+    return report;
+}
+template <class Valid, class Evaluate>
+int run(backtest_config::StrategyConfig cfg, bool futures, size_t warmup, const std::vector<Axis> &axes, Valid valid,
+        Evaluate evaluate, Selection selection = {})
+{
+    try
+    {
+        const auto &name = cfg.name;
+        if (cfg.is_futures() != futures)
+            throw std::runtime_error("Strategy market does not match configuration");
+        // The single-asset EMA benchmark intentionally uses the first configured coin.
+        if (name == "2EMA_crossover")
+            cfg.coins.resize(1);
+        backtest_config::print_summary(cfg);
+        init_talib();
+        auto data = load_market(cfg, warmup);
+        auto parameters = sample(axes, cfg.max_trials, cfg.seed, valid);
+        const double begin = get_wall_time();
+        auto report = evaluate_search(data, cfg, parameters, selection, evaluate);
+        report["code_revision"] = BACKTEST_REVISION;
+        report["workers"] = cfg.workers;
+        report["holdout_fraction"] = cfg.holdout_fraction;
+        report["strategy"] = name;
+        report["model"] = "next_open_stop_first_v2";
+        report["parameter_names"] = nlohmann::json::array();
+        for (const auto &a : axes)
+            report["parameter_names"].push_back(a.name);
+        report["elapsed_seconds"] = get_wall_time() - begin;
+        report["resident_mb"] = process_mem_usage();
+        report["assumptions"] = {
+            {"fee_percent", 0.1},
+            {"slippage_bps", 0},
+            {"leverage", 1},
+            {"liquidation_model", false},
+            {"funding_order",
+             "exact opening: before orders; fractional milliseconds: after orders, before intrabar stops"},
+            {"drawdown", "execution_bar_close"},
+            {"intrabar_fill_timestamp", "bar close upper bound"}};
+        std::filesystem::create_directories("results");
+        const auto stamp = std::chrono::system_clock::now().time_since_epoch().count();
+        const std::string path =
+            "results/" + name + "-" + std::to_string(stamp) + "-" + std::to_string(getpid()) + ".json";
+        std::ofstream f(path + ".tmp");
+        f << report.dump(2) << "\n";
+        f.close();
+        if (!f)
+            throw std::runtime_error("Could not write result");
+        std::filesystem::rename(path + ".tmp", path);
+        std::cout << report["status"] << " | " << parameters.size() << " trials | result " << path << "\n";
+        if (report.contains("holdout"))
+            std::cout << "Training gain " << report["training"]["gain_percent"] << "% | holdout gain "
+                      << report["holdout"]["gain_percent"] << "%\n";
+        TA_Shutdown();
+        return 0;
+    }
+    catch (const std::exception &e)
+    {
+        std::cerr << "ERROR: " << e.what() << "\n";
+        TA_Shutdown();
+        return 1;
+    }
+}
+inline std::vector<int> slots(const backtest_config::StrategyConfig &c)
+{
+    return integer_range(1, static_cast<int>(c.nb_pairs()));
+}
+template <class Body> int configure(const std::string &name, Body body)
+{
+    try
+    {
+        return body(backtest_config::load(name));
+    }
+    catch (const std::exception &e)
+    {
+        std::cerr << "ERROR: " << e.what() << "\n";
+        return 1;
+    }
+}
+template <class Signal>
+RUN_RESULTf evaluate(const MarketData &d, trade_core::Window w, bool futures, uint limit, size_t ready, Signal signal,
+                     bool trace)
+{
+    return trade_core::simulate(
+        d, w, futures, limit,
+        [=](uint p, size_t i)
+        {
+        return i < ready ? trade_core::Intent{} : signal(p, i);
+        },
+        trace);
 }
 } // namespace strategy_runner

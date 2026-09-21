@@ -1,29 +1,5 @@
-// Minimal self-contained unit tests for the shared backtester machinery. Each test
-// calls a named function that asserts its invariants; main() runs them all and
-// reports. A test fails by printing "FAIL: <name> <expr>" and setting exit=1 — no
-// external framework needed.
-//
-// Build:  make tests
-// Run:    ./tests.exe
-//
-// Covered:
-//   - trade_core::open_spot_long / close_spot_long fee accounting
-//   - trade_core::calculate_result_metrics edge cases
-//   - trade_core::record_wallet_snapshot drawdown math
-//   - trade_core futures long/short PnL sign
-//   - tools::integer_range boundary semantics
-//   - tools::float_Nvalues_range N=1 edge case
-//   - tools::find_max/find_min handle all-negative inputs
-//   - tools::get_funding_fee_if_any timestamp filtering
-//   - custom_talib_wrapper::TALIB_EMA warmup length
-//   - custom_talib_wrapper::TALIB_BBANDS output sizing + band ordering
-//   - custom_talib_wrapper::TALIB_AO output length
-//   - custom_talib_wrapper::TALIB_STOCHRSI_not_averaged range [0,1]
-//   - trade_core::apply_funding_fee (long debited, no-op on flat)
-//   - tools::calculate_calmar_ratio on a synthetic 3-year wallet curve
-//   - tools::realign_timestamps synthetic misaligned pair
-//   - strategy_runner::sweep best-tracking predicate (gating filters)
-
+// Analytic component checks and account arithmetic. Run in Docker Compose with
+// bash run_regression.sh; production execution is checked in execution_tests.cpp.
 #include <cmath>
 #include <cstdio>
 #include <cstdlib>
@@ -43,29 +19,29 @@ namespace
 int g_fail_count = 0;
 int g_run_count = 0;
 
-#define REQUIRE(expr)                                                                                          \
-    do                                                                                                         \
-    {                                                                                                          \
-        ++g_run_count;                                                                                         \
-        if (!(expr))                                                                                           \
-        {                                                                                                      \
-            ++g_fail_count;                                                                                    \
-            std::cerr << "FAIL " << __FUNCTION__ << ": " #expr " at " << __FILE__ << ":" << __LINE__ << "\n";  \
-        }                                                                                                      \
+#define REQUIRE(expr)                                                                                                  \
+    do                                                                                                                 \
+    {                                                                                                                  \
+        ++g_run_count;                                                                                                 \
+        if (!(expr))                                                                                                   \
+        {                                                                                                              \
+            ++g_fail_count;                                                                                            \
+            std::cerr << "FAIL " << __FUNCTION__ << ": " #expr " at " << __FILE__ << ":" << __LINE__ << "\n";          \
+        }                                                                                                              \
     } while (0)
 
-#define REQUIRE_NEAR(a, b, eps)                                                                                 \
-    do                                                                                                          \
-    {                                                                                                           \
-        ++g_run_count;                                                                                          \
-        const double _a = static_cast<double>(a);                                                               \
-        const double _b = static_cast<double>(b);                                                               \
-        if (std::fabs(_a - _b) > (eps))                                                                         \
-        {                                                                                                       \
-            ++g_fail_count;                                                                                     \
-            std::cerr << "FAIL " << __FUNCTION__ << ": " #a "=" << _a << " vs " #b "=" << _b                    \
-                      << " (tol=" << (eps) << ") at " << __FILE__ << ":" << __LINE__ << "\n";                   \
-        }                                                                                                       \
+#define REQUIRE_NEAR(a, b, eps)                                                                                        \
+    do                                                                                                                 \
+    {                                                                                                                  \
+        ++g_run_count;                                                                                                 \
+        const double _a = static_cast<double>(a);                                                                      \
+        const double _b = static_cast<double>(b);                                                                      \
+        if (!std::isfinite(_a) || !std::isfinite(_b) || std::fabs(_a - _b) > (eps))                                    \
+        {                                                                                                              \
+            ++g_fail_count;                                                                                            \
+            std::cerr << "FAIL " << __FUNCTION__ << ": " #a "=" << _a << " vs " #b "=" << _b << " (tol=" << (eps)      \
+                      << ") at " << __FILE__ << ":" << __LINE__ << "\n";                                               \
+        }                                                                                                              \
     } while (0)
 
 void test_open_close_spot_long_fee_roundtrip()
@@ -132,6 +108,7 @@ void test_calculate_result_metrics()
 {
     trade_core::TradeStats stats{};
     stats.nb_positions_entered = 10;
+    stats.nb_closed = 10;
     stats.nb_profit = 4;
     const trade_core::ResultMetrics m = trade_core::calculate_result_metrics(1500.0f, 1000.0f, -20.0f, stats);
     REQUIRE_NEAR(m.gain, 50.0f, 1e-4);
@@ -160,6 +137,7 @@ void test_calculate_result_metrics_degenerate()
     // Trades happened but the equity curve never drew down -> ddc == 0.
     trade_core::TradeStats winners{};
     winners.nb_positions_entered = 10;
+    winners.nb_closed = 10;
     winners.nb_profit = 10;
     const trade_core::ResultMetrics m1 = trade_core::calculate_result_metrics(2000.0f, 1000.0f, 0.0f, winners);
     REQUIRE(std::isfinite(m1.score));
@@ -176,66 +154,18 @@ void test_calculate_result_metrics_degenerate()
     REQUIRE(std::isfinite(r.win_rate));
 }
 
-void test_supertrend_dir_only_matches_full()
+void test_supertrend_known_reversal()
 {
-    // Regression: TALIB_SuperTrend_dir_only was a copy-paste of TALIB_SuperTrend. It is
-    // now a thin wrapper, so the two must agree element for element.
     TA_Initialize();
-    const int n = 200;
-    std::vector<float> high, low, close;
-    high.reserve(n);
-    low.reserve(n);
-    close.reserve(n);
-    for (int i = 0; i < n; ++i)
-    {
-        const float base = 100.0f + 20.0f * std::sin(i * 0.15f) + 0.05f * i;
-        high.push_back(base + 1.5f);
-        low.push_back(base - 1.5f);
-        close.push_back(base);
-    }
-
-    const SuperTrend st = TALIB_SuperTrend(high, low, close, 10, 3.0f);
-    const std::vector<float> dir = TALIB_SuperTrend_dir_only(high, low, close, 10, 3.0f);
-
-    REQUIRE(st.supertrend.size() == static_cast<size_t>(n));
-    REQUIRE(dir.size() == st.supertrend.size());
-    REQUIRE(st.final_lowerband.size() == static_cast<size_t>(n));
-    REQUIRE(st.final_upperband.size() == static_cast<size_t>(n));
-
-    int mismatches = 0;
-    int saw_up = 0;
-    int saw_down = 0;
-    for (size_t i = 0; i < dir.size(); ++i)
-    {
-        if (dir[i] != static_cast<float>(st.supertrend[i]))
-        {
-            ++mismatches;
-        }
-        if (st.supertrend[i] == 1)
-        {
-            ++saw_up;
-        }
-        if (st.supertrend[i] == -1)
-        {
-            ++saw_down;
-        }
-    }
-    REQUIRE(mismatches == 0);
-    // An oscillating series must flip direction, otherwise this test proves nothing.
-    REQUIRE(saw_up > 0);
-    REQUIRE(saw_down > 0);
-
-    // Fractional multipliers are the common SuperTrend setting and used to be
-    // unreachable through the int parameter; a wider band must not flip more often.
-    const SuperTrend narrow = TALIB_SuperTrend(high, low, close, 10, 1.5f);
-    int narrow_flips = 0;
-    int wide_flips = 0;
-    for (size_t i = 1; i < dir.size(); ++i)
-    {
-        narrow_flips += (narrow.supertrend[i] != narrow.supertrend[i - 1]) ? 1 : 0;
-        wide_flips += (st.supertrend[i] != st.supertrend[i - 1]) ? 1 : 0;
-    }
-    REQUIRE(narrow_flips >= wide_flips);
+    const std::vector<float> close{100, 100, 100, 103, 97};
+    const std::vector<float> high{101, 101, 101, 104, 98}, low{99, 99, 99, 102, 96};
+    const auto st = TALIB_SuperTrend(high, low, close, 2, 1.0f);
+    // ATR at index 2 is 2; at index 3 it is (2+4)/2=3. The lower
+    // band rises from 98 to 100; the next close at 97 breaks it downward.
+    REQUIRE(st.warmup == 2);
+    REQUIRE_NEAR(st.final_lowerband[2], 98, 1e-6);
+    REQUIRE_NEAR(st.final_lowerband[3], 100, 1e-6);
+    REQUIRE(st.supertrend[2] == 1 && st.supertrend[3] == 1 && st.supertrend[4] == -1);
     TA_Shutdown();
 }
 
@@ -483,7 +413,7 @@ void test_apply_funding_fee()
     trade_core::apply_funding_fee(state, 0, 110.0, fee);
     const double expected_deduction = 1.0 * 110.0 * fee;
     REQUIRE_NEAR(before - state.usdt_amount, expected_deduction, 1e-9);
-    REQUIRE_NEAR(state.total_fees_paid_usdt, expected_deduction, 1e-9);
+    REQUIRE_NEAR(state.net_funding, expected_deduction, 1e-9);
 
     // Zero funding -> no-op even with a position.
     const double after = state.usdt_amount;
@@ -493,29 +423,13 @@ void test_apply_funding_fee()
 
 void test_calculate_calmar_ratio()
 {
-    // Synthetic: ATH then flat over ~3 years. Build timestamps monthly.
-    std::vector<int64_t> ts;
-    std::vector<double> wv;
-    const int64_t seconds_per_month = 30 * 24 * 3600;
-    const int64_t base = 1577836800; // 2020-01-01 00:00 UTC
-    for (int m = 0; m < 36; ++m)
-    {
-        ts.push_back(base + m * seconds_per_month);
-        wv.push_back(1000.0 + 10.0 * m); // +1% per month roughly
-    }
-    // Callers pass ResultMetrics::ddc (positive) as the normalizer.
-    const double cr = calculate_calmar_ratio(ts, wv, 10.0);
-    REQUIRE(std::isfinite(cr));
-    REQUIRE(cr > 0.0);
-
-    // Too-short series (<= 4 points) returns the sentinel -100.
-    const std::vector<int64_t> short_ts{1, 2, 3};
-    const std::vector<double> short_wv{1.0, 2.0, 3.0};
-    REQUIRE_NEAR(calculate_calmar_ratio(short_ts, short_wv, 10.0), -100.0, 1e-6);
-
-    // A non-positive normalizer (zero drawdown) must not divide by zero.
-    REQUIRE_NEAR(calculate_calmar_ratio(ts, wv, 0.0), -100.0, 1e-6);
-    REQUIRE(std::isfinite(calculate_calmar_ratio_monthly(ts, wv, 0.0)));
+    // Doubling over two 365.25-day years gives sqrt(2)-1 annual growth;
+    // divided by a 25% drawdown, the ratio is 1.65685424949238.
+    auto r = trade_core::calmar_ratio(1000, 2000, 63115200, -25);
+    REQUIRE(r.has_value());
+    REQUIRE_NEAR(*r, 1.65685424949238, 1e-12);
+    REQUIRE(!trade_core::calmar_ratio(1000, 2000, 63115200, 0));
+    REQUIRE(*trade_core::calmar_ratio(1000, 1140, 14 * 86400, -10) > 0);
 }
 
 void test_convert_to_unix_timestamp_is_utc()
@@ -614,17 +528,19 @@ void test_realign_timestamps_noop_when_aligned()
     KLINEf other{};
     for (int i = 0; i < 20; ++i)
     {
-        base.timestamp.push_back(1000 + i * 60);
+        base.timestamp.push_back(1020 + i * 60);
         base.open.push_back(100.0f + i);
         base.high.push_back(101.0f + i);
         base.low.push_back(99.0f + i);
         base.close.push_back(100.0f + i);
+        base.volume.push_back(1);
 
-        other.timestamp.push_back(1000 + i * 60);
+        other.timestamp.push_back(1020 + i * 60);
         other.open.push_back(200.0f + i);
         other.high.push_back(201.0f + i);
         other.low.push_back(199.0f + i);
         other.close.push_back(200.0f + i);
+        other.volume.push_back(1);
     }
     base.nb = 20;
     base.name = "BASE";
@@ -639,208 +555,8 @@ void test_realign_timestamps_noop_when_aligned()
     REQUIRE(other.timestamp.size() == base.timestamp.size());
 }
 
-void test_random_number_generator_seeding()
-{
-    // Regression: the constructor built a local mt19937 that shadowed the member, so the
-    // member kept whatever the init-list gave it and the intended thread-id mixing was
-    // discarded. Two generators must produce different streams, and every draw must land
-    // inside [0, upperLimit].
-    RandomNumberGenerator a;
-    RandomNumberGenerator b;
-
-    std::vector<int> sa;
-    std::vector<int> sb;
-    bool in_range = true;
-    for (int i = 0; i < 64; ++i)
-    {
-        const int va = a.getRandomNumber(999);
-        const int vb = b.getRandomNumber(999);
-        in_range = in_range && va >= 0 && va <= 999 && vb >= 0 && vb <= 999;
-        sa.push_back(va);
-        sb.push_back(vb);
-    }
-    REQUIRE(in_range);
-    REQUIRE(sa != sb);
-
-    // A zero upper limit must yield exactly 0 rather than an empty-distribution surprise
-    // (the F_* sweeps call getRandomNumber(range.size() - 1) on single-element ranges).
-    RandomNumberGenerator c;
-    REQUIRE(c.getRandomNumber(0) == 0);
-}
-
-void test_strategy_param_structs_are_fully_initialized()
-{
-    // Regression for the bug that stopped 3EMA_SRSI_ATR opening any position at all:
-    // EMA3_params has eight members and its initializer supplied seven, so the
-    // max-open-trades value landed in SRSIU and max_open_trades defaulted to 0 --
-    // making `active_positions < MAX_OPEN_TRADES` false on every bar.
-    //
-    // Verified here rather than by running the strategy: its sweep is 83.5 million
-    // parameter sets over 5m data, and it only prints a result block at the end.
-    const EMA3_params p{3, 50, 200, 5.0f, 5.0f, 0.2f, 0.8f, 4};
-    REQUIRE(p.ema1 == 3);
-    REQUIRE(p.ema2 == 50);
-    REQUIRE(p.ema3 == 200);
-    REQUIRE_NEAR(p.up, 5.0f, 1e-6);
-    REQUIRE_NEAR(p.down, 5.0f, 1e-6);
-    REQUIRE_NEAR(p.SRSIL, 0.2f, 1e-6);
-    REQUIRE_NEAR(p.SRSIU, 0.8f, 1e-6);
-    // The one that mattered: a zero here means the strategy cannot trade.
-    REQUIRE(p.max_open_trades == 4);
-    REQUIRE(p.max_open_trades != 0);
-
-    // A zero cap makes open_spot_long unreachable, which is exactly what the broken
-    // initializer produced. Show the guard the strategies use rejects it.
-    trade_core::PortfolioState<2> state(1000.0, 2);
-    const uint broken_cap = 0;
-    REQUIRE(!(state.active_positions < broken_cap)); // no position can ever open
-    const uint good_cap = 2;
-    REQUIRE(state.active_positions < good_cap);
-
-    // The other param structs must round-trip their members too.
-    const BigWill_params b{5, 34, 20, 200, 3};
-    REQUIRE(b.AO_fast == 5);
-    REQUIRE(b.max_open_trades == 3);
-    const trix_params t{100, 9, 21, 2};
-    REQUIRE(t.max_open_trades == 2);
-    const BBTREND_params bb{200, 20, 2.0f, 5};
-    REQUIRE(bb.max_open_trades == 5);
-    const ST_EMA_ATR_params st{100, 3.0f, 3.0f, 6};
-    REQUIRE(st.max_open_trades == 6);
-    const SR_params sr{10, 100, 4};
-    REQUIRE(sr.max_open_trades == 4);
-}
-
 // Mirrors the long take-profit / stop-loss test SuperTrend_EMA_ATR and F_3EMA_SRSI_ATR
 // both use, so the convention is pinned in one place.
-struct LongExit
-{
-    bool take_profit_hit;
-    bool stop_loss_hit;
-};
-
-LongExit evaluate_long_exit(const float bar_high, const float bar_low,
-                            const float take_profit, const float stop_loss)
-{
-    return {bar_high >= take_profit, bar_low <= stop_loss};
-}
-
-void test_long_stop_and_target_use_the_right_bar_extreme()
-{
-    // A long is stopped out when the price trades DOWN to the stop, i.e. when the bar's
-    // low reaches it -- and takes profit when the bar's high reaches the target.
-    //
-    // SuperTrend_EMA_ATR had these inverted: it tested `high < stop_loss`, which requires
-    // the entire bar to sit below the stop. Since high >= low that is strictly harder to
-    // satisfy than the price touching the stop, so the stop only fired after the market
-    // had already traded clean through it.
-    const float entry = 100.0f;
-    const float take_profit = 110.0f;
-    const float stop_loss = 95.0f;
-
-    // Bar dips to the stop and recovers to close above it: stopped out.
-    LongExit e = evaluate_long_exit(/*high=*/104.0f, /*low=*/94.0f, take_profit, stop_loss);
-    REQUIRE(e.stop_loss_hit);
-    REQUIRE(!e.take_profit_hit);
-
-    // The old inverted test would NOT have fired on that bar, because its high (104) is
-    // not below the stop (95). This is the regression.
-    REQUIRE(!(104.0f < stop_loss));
-
-    // Bar spikes to the target and closes back below: target reached.
-    e = evaluate_long_exit(/*high=*/112.0f, /*low=*/101.0f, take_profit, stop_loss);
-    REQUIRE(e.take_profit_hit);
-    REQUIRE(!e.stop_loss_hit);
-
-    // Quiet bar between the two levels: neither.
-    e = evaluate_long_exit(/*high=*/105.0f, /*low=*/99.0f, take_profit, stop_loss);
-    REQUIRE(!e.take_profit_hit);
-    REQUIRE(!e.stop_loss_hit);
-
-    // Exactly touching either level counts as reached.
-    e = evaluate_long_exit(/*high=*/110.0f, /*low=*/95.0f, take_profit, stop_loss);
-    REQUIRE(e.take_profit_hit);
-    REQUIRE(e.stop_loss_hit);
-
-    // A gap straight through the stop must still register.
-    e = evaluate_long_exit(/*high=*/90.0f, /*low=*/85.0f, take_profit, stop_loss);
-    REQUIRE(e.stop_loss_hit);
-
-    // Sanity: the stop sits below entry and the target above it.
-    REQUIRE(stop_loss < entry);
-    REQUIRE(take_profit > entry);
-}
-
-void test_first_tradable_index()
-{
-    // Takes the worst warmup among the indicators in use...
-    REQUIRE(strategy_runner::first_tradable_index({10, 250, 33}) == 250);
-    // ...but never starts before the pair's own data does...
-    REQUIRE(strategy_runner::first_tradable_index({10, 250, 33}, 600) == 600);
-    REQUIRE(strategy_runner::first_tradable_index({10, 250, 33}, 100) == 250);
-    // ...and leaves room for strategies that read backwards from the current bar.
-    REQUIRE(strategy_runner::first_tradable_index({10, 250}, 100, 2) == 252);
-    REQUIRE(strategy_runner::first_tradable_index({}, 0, 0) == 0);
-
-    // The point of it: a real warmup drives the start index, so raising an indicator
-    // period cannot quietly outgrow a hard-coded constant.
-    TA_Initialize();
-    std::vector<float> series;
-    for (int i = 0; i < 900; ++i)
-    {
-        series.push_back(100.0f + static_cast<float>(i));
-    }
-    size_t warm_short = 0;
-    size_t warm_long = 0;
-    TALIB_EMA(series, 50, &warm_short);
-    TALIB_EMA(series, 800, &warm_long);
-    const uint begin = strategy_runner::first_tradable_index({warm_short, warm_long}, 600);
-    // The 800-period EMA warms up past the old hard-coded 600.
-    REQUIRE(begin == static_cast<uint>(warm_long));
-    REQUIRE(begin > 600);
-    TA_Shutdown();
-}
-
-void test_strategy_runner_sweep_filters()
-{
-    // Exercise the gating predicate: only results that pass all filters should
-    // be picked as `best`. Fabricate three results with different trade-count,
-    // drawdown, and gain profiles.
-    struct P
-    {
-        int id;
-    };
-    std::vector<P> params{{0}, {1}, {2}};
-
-    auto process = [](const P &p) {
-        RUN_RESULTf r{};
-        r.gain_pc = 100.0f + p.id * 50.0f; // 100, 150, 200
-        r.nb_posi_entered = (p.id == 0) ? 10 : 500;
-        r.max_DD = (p.id == 1) ? -99.0f : -20.0f;
-        r.score = 10.0f + p.id; // p=2 has highest score
-        r.max_open_trades = 1;
-        r.param_str = "id=" + std::to_string(p.id);
-        return r;
-    };
-
-    strategy_runner::SweepConfig cfg;
-    cfg.strategy_name = "unit_test";
-    cfg.out_filename = "_unit_test_best.txt";
-    cfg.min_trades = 100;
-    cfg.min_dd = -40.0f;
-    cfg.print_every = 9999; // suppress periodic output during the test
-    cfg.min_reasonable_gain = 0.0f;
-
-    const RUN_RESULTf best = strategy_runner::sweep(cfg, params, process);
-
-    // p=0 excluded (too few trades), p=1 excluded (DD too deep); p=2 wins.
-    REQUIRE(best.param_str == "id=2");
-    REQUIRE_NEAR(best.gain_pc, 200.0f, 1e-6);
-
-    // Cleanup the score file the sweep writes out.
-    std::remove("_unit_test_best.txt");
-}
-
 // ---------------------------------------------------------------------------
 //  Indicator library
 //
@@ -979,8 +695,8 @@ void test_stoch_and_aroon()
     bool aroon_bounded = true;
     for (size_t i = ar.warmup; i < ar.up.size(); ++i)
     {
-        aroon_bounded = aroon_bounded && ar.up[i] >= -1e-3f && ar.up[i] <= 100.001f &&
-                        ar.down[i] >= -1e-3f && ar.down[i] <= 100.001f;
+        aroon_bounded = aroon_bounded && ar.up[i] >= -1e-3f && ar.up[i] <= 100.001f && ar.down[i] >= -1e-3f &&
+                        ar.down[i] <= 100.001f;
     }
     REQUIRE(aroon_bounded);
     TA_Shutdown();
@@ -1103,11 +819,11 @@ void test_volume_family()
     const std::vector<float> vol{100.0f, 200.0f, 300.0f, 400.0f, 500.0f};
     const std::vector<float> obv = TALIB_OBV(close, vol);
     REQUIRE(obv.size() == close.size());
-    REQUIRE_NEAR(obv[0], 100.0f, 1e-3);  // seed
-    REQUIRE_NEAR(obv[1], 300.0f, 1e-3);  // up   -> +200
-    REQUIRE_NEAR(obv[2], 0.0f, 1e-3);    // down -> -300
-    REQUIRE_NEAR(obv[3], 0.0f, 1e-3);    // flat -> unchanged
-    REQUIRE_NEAR(obv[4], 500.0f, 1e-3);  // up   -> +500
+    REQUIRE_NEAR(obv[0], 100.0f, 1e-3); // seed
+    REQUIRE_NEAR(obv[1], 300.0f, 1e-3); // up   -> +200
+    REQUIRE_NEAR(obv[2], 0.0f, 1e-3);   // down -> -300
+    REQUIRE_NEAR(obv[3], 0.0f, 1e-3);   // flat -> unchanged
+    REQUIRE_NEAR(obv[4], 500.0f, 1e-3); // up   -> +500
 
     const Ohlcv s = make_series();
     size_t warm_mfi = 0;
@@ -1209,8 +925,8 @@ void test_resample_timeframe_off_boundary_start()
     // from index 0 built "hourly" candles spanning 16:55 to 17:50. The resampler must
     // skip forward to the first true hour boundary and report that offset.
     KLINEf in{};
-    const int64_t hour = 1687104000;   // an exact hour
-    const int64_t start = hour - 300;  // 5 minutes earlier: 16:55
+    const int64_t hour = 1687104000;  // an exact hour
+    const int64_t start = hour - 300; // 5 minutes earlier: 16:55
     for (int i = 0; i < 26; ++i)
     {
         in.timestamp.push_back(start + i * 300);
@@ -1239,12 +955,12 @@ void test_resample_timeframe_off_boundary_start()
     // Hour 0 spans bars 1..12 and closes at the end of bar 12, so bars 0..12 predate
     // any completed hour and carry the fill.
     REQUIRE(proj[0] == -1.0f);
-    REQUIRE(proj[12] == -1.0f);
+    REQUIRE(proj[11] == -1.0f);
     // Hour 0's value is visible from bar 13 through bar 24; hour 1 closes at bar 24 and
     // becomes visible at bar 25.
-    REQUIRE(proj[13] == 7.0f);
-    REQUIRE(proj[24] == 7.0f);
-    REQUIRE(proj[25] == 8.0f);
+    REQUIRE(proj[12] == 7.0f);
+    REQUIRE(proj[23] == 7.0f);
+    REQUIRE(proj[24] == 8.0f);
 }
 
 void test_project_htf_to_ltf_has_no_lookahead()
@@ -1255,28 +971,27 @@ void test_project_htf_to_ltf_has_no_lookahead()
 
     REQUIRE(ltf.size() == 36);
 
-    // The critical property: group 0's value must NOT be visible during group 0 --
-    // that candle has not closed yet. Bars 0..11 carry the fill sentinel.
+    // Bars 0..10 close before the higher candle is complete; bar 11 completes it.
     bool head_is_fill = true;
-    for (size_t i = 0; i < 12; ++i)
+    for (size_t i = 0; i < 11; ++i)
     {
         head_is_fill = head_is_fill && ltf[i] == -777.0f;
     }
     REQUIRE(head_is_fill);
 
-    // Group 0's value becomes visible across group 1, and group 1's across group 2.
+    // Each published close remains available until the next higher close.
     bool block1 = true, block2 = true;
-    for (size_t i = 12; i < 24; ++i)
+    for (size_t i = 11; i < 23; ++i)
     {
         block1 = block1 && ltf[i] == 10.0f;
     }
-    for (size_t i = 24; i < 36; ++i)
+    for (size_t i = 23; i < 35; ++i)
     {
         block2 = block2 && ltf[i] == 20.0f;
     }
     REQUIRE(block1);
     REQUIRE(block2);
-    // htf[2] would only appear at bar 36, which is past the end -- never leaked.
+    REQUIRE(ltf[35] == 30.0f); // available at this bar close, for next-open execution
 }
 
 using TestFn = void (*)();
@@ -1292,7 +1007,7 @@ const NamedTest ALL_TESTS[] = {
     {"wallet_precision_over_many_roundtrips", test_wallet_precision_over_many_roundtrips},
     {"calculate_result_metrics", test_calculate_result_metrics},
     {"calculate_result_metrics_degenerate", test_calculate_result_metrics_degenerate},
-    {"supertrend_dir_only_matches_full", test_supertrend_dir_only_matches_full},
+    {"supertrend_known_reversal", test_supertrend_known_reversal},
     {"moving_averages", test_moving_averages},
     {"macd", test_macd},
     {"stoch_and_aroon", test_stoch_and_aroon},
@@ -1304,10 +1019,6 @@ const NamedTest ALL_TESTS[] = {
     {"resample_timeframe", test_resample_timeframe},
     {"resample_timeframe_off_boundary_start", test_resample_timeframe_off_boundary_start},
     {"project_htf_to_ltf_has_no_lookahead", test_project_htf_to_ltf_has_no_lookahead},
-    {"first_tradable_index", test_first_tradable_index},
-    {"strategy_param_structs_are_fully_initialized", test_strategy_param_structs_are_fully_initialized},
-    {"long_stop_and_target_use_the_right_bar_extreme", test_long_stop_and_target_use_the_right_bar_extreme},
-    {"random_number_generator_seeding", test_random_number_generator_seeding},
     {"record_wallet_snapshot_drawdown", test_record_wallet_snapshot_drawdown},
     {"futures_long_close_sign", test_futures_long_close_sign},
     {"futures_short_close_sign", test_futures_short_close_sign},
@@ -1326,7 +1037,6 @@ const NamedTest ALL_TESTS[] = {
     {"apply_funding_fee", test_apply_funding_fee},
     {"calculate_calmar_ratio", test_calculate_calmar_ratio},
     {"realign_timestamps_noop_when_aligned", test_realign_timestamps_noop_when_aligned},
-    {"strategy_runner_sweep_filters", test_strategy_runner_sweep_filters},
 };
 } // namespace
 
@@ -1340,8 +1050,7 @@ int main()
         std::cout << (ok ? "PASS " : "FAIL ") << t.name << "\n";
     }
 
-    std::cout << "\n"
-              << (g_run_count - g_fail_count) << " / " << g_run_count << " checks passed\n";
+    std::cout << "\n" << (g_run_count - g_fail_count) << " / " << g_run_count << " checks passed\n";
     if (g_fail_count != 0)
     {
         std::cout << "TESTS FAILED: " << g_fail_count << "\n";
