@@ -18,6 +18,6 @@ export TSAN_OPTIONS="halt_on_error=1"
 timeout 120 "./build/$mode/tests.exe"
 timeout 120 "./build/$mode/execution_tests.exe"
 if [[ "$mode" == release ]]; then
-    python3 -m unittest discover -s tools -p 'test_*.py' -q
+    python3 -m unittest discover -s tests -p 'test_*.py' -q
 fi
 echo "$mode behavioral checks passed"

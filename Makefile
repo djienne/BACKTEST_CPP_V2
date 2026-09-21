@@ -11,7 +11,7 @@
 #    make format             clang-format every source in place
 #    make clean              remove binaries and objects
 #
-#  Strategies are discovered from *.cpp automatically -- adding a strategy needs
+#  Strategies are discovered from strategies/*.cpp -- adding a strategy needs
 #  no edit to this file. Objects live under build/$(BUILD)/ with -MMD header
 #  dependency tracking, so a header edit triggers exactly the right rebuilds and
 #  the four build modes never clobber each other's objects.
@@ -46,24 +46,23 @@ endif
 WARNINGS := -Wall -Wextra -Wshadow
 
 REVISION := $(shell git rev-parse --short HEAD 2>/dev/null || echo unknown)$(shell git diff --quiet -- . ":(exclude)data" || echo -dirty)
-CXXFLAGS := -DBACKTEST_REVISION=\"$(REVISION)\" -std=gnu++17 $(CXXFLAGS_$(BUILD)) $(WARNINGS) $(TALIB_INC) -MMD -MP
+CXXFLAGS := -DBACKTEST_REVISION=\"$(REVISION)\" -std=gnu++17 $(CXXFLAGS_$(BUILD)) $(WARNINGS) -I. $(TALIB_INC) -MMD -MP
 LDFLAGS  := $(LDFLAGS_$(BUILD))
 LDLIBS   := $(TALIB_LIB) -lpthread
 
 OBJDIR := build/$(BUILD)
 
-# Shared library layer, linked into every binary.
-COMMON_SRC := indicators.cpp tools.cpp trade_core.cpp config.cpp data_io.cpp
-# Non-strategy executables (unit tests + numeric regression harnesses).
-DRIVER_SRC := tests.cpp execution_tests.cpp verification_regression.cpp strategy_regression.cpp
-# Everything else in the root is a strategy.
-STRATEGY_SRC := $(filter-out $(COMMON_SRC) $(DRIVER_SRC),$(wildcard *.cpp))
-
+# Objects retain their source directories; executables keep their public names.
+COMMON_SRC := $(wildcard engine/*.cpp)
+STRATEGY_SRC := $(wildcard strategies/*.cpp)
+DRIVER_SRC := $(wildcard tests/*.cpp)
 COMMON_OBJ := $(addprefix $(OBJDIR)/,$(COMMON_SRC:.cpp=.o))
-STRATEGIES := $(STRATEGY_SRC:.cpp=)
-DRIVERS    := $(DRIVER_SRC:.cpp=)
-ALL_EXE    := $(addprefix $(OBJDIR)/,$(addsuffix .exe,$(STRATEGIES) $(DRIVERS)))
-ALL_OBJ    := $(addprefix $(OBJDIR)/,$(COMMON_SRC:.cpp=.o) $(STRATEGY_SRC:.cpp=.o) $(DRIVER_SRC:.cpp=.o))
+STRATEGIES := $(notdir $(STRATEGY_SRC:.cpp=))
+DRIVERS := $(notdir $(DRIVER_SRC:.cpp=))
+STRATEGY_EXE := $(addprefix $(OBJDIR)/,$(addsuffix .exe,$(STRATEGIES)))
+DRIVER_EXE := $(addprefix $(OBJDIR)/,$(addsuffix .exe,$(DRIVERS)))
+ALL_EXE := $(STRATEGY_EXE) $(DRIVER_EXE)
+ALL_OBJ := $(addprefix $(OBJDIR)/,$(COMMON_SRC:.cpp=.o) $(STRATEGY_SRC:.cpp=.o) $(DRIVER_SRC:.cpp=.o))
 .SECONDARY: $(ALL_OBJ)
 
 .PHONY: default all clean format help $(STRATEGIES) $(DRIVERS) verification
@@ -78,17 +77,18 @@ $(STRATEGIES) $(DRIVERS): %: $(OBJDIR)/%.exe
 # Loader verification driver.
 verification: $(OBJDIR)/verification_regression.exe
 
-$(OBJDIR)/%.o: %.cpp | $(OBJDIR)
+$(OBJDIR)/%.o: %.cpp
+	@mkdir -p $(@D)
 	$(CXX) $(CXXFLAGS) -c $< -o $@
 
-$(OBJDIR)/%.exe: $(OBJDIR)/%.o $(COMMON_OBJ)
+$(STRATEGY_EXE): $(OBJDIR)/%.exe: $(OBJDIR)/strategies/%.o
+$(DRIVER_EXE): $(OBJDIR)/%.exe: $(OBJDIR)/tests/%.o
+
+$(ALL_EXE): $(COMMON_OBJ)
 	$(CXX) $(LDFLAGS) $^ $(LDLIBS) -o $@
 
-$(OBJDIR):
-	@mkdir -p $(OBJDIR)
-
 format:
-	clang-format -i $(wildcard *.cpp) $(wildcard *.hh)
+	clang-format -i $(wildcard engine/*.cpp engine/*.hh strategies/*.cpp strategies/*.hh tests/*.cpp tests/*.hh)
 
 clean:
 	rm -f *.exe
@@ -99,4 +99,4 @@ help:
 	@echo "Drivers   : $(DRIVERS)"
 	@echo "Build mode: BUILD=$(BUILD)  (release|debug|asan|tsan)"
 
--include $(wildcard $(OBJDIR)/*.d)
+-include $(ALL_OBJ:.o=.d)

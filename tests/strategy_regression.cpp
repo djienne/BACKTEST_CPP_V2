@@ -1,7 +1,6 @@
-// Calls the same EMA evaluator as the production binary, without duplicating signals.
-#define main ema_program_main
-#include "backtest_double_EMA_float.cpp"
-#undef main
+// Calls the production EMA evaluator; the independent Python ledger is the oracle.
+#include "strategies/double_ema.hh"
+using namespace strategy_runner;
 int main(int argc, char **argv)
 {
     try
@@ -18,7 +17,7 @@ int main(int argc, char **argv)
         const size_t begin = static_cast<size_t>(std::max(p[0], p[1])) + 1;
         std::vector<IndicatorCache> cache(1);
         init_talib();
-        auto result = evaluate_double_ema(d, cache, p, {begin, d.execution[0].nb}, true);
+        auto result = strategies::evaluate_double_ema(d, cache, p, {begin, d.execution[0].nb}, true);
         std::cout << result_json(result).dump() << "\n";
         TA_Shutdown();
         return 0;

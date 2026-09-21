@@ -1,6 +1,7 @@
 // Independent small ledgers and causal properties through the production executor.
 // No expected output is calculated by calling the implementation under test.
-#include "strategy_runner.hh"
+#include "engine/strategy_runner.hh"
+#include "strategies/bbtrend.hh"
 #include <stdexcept>
 #include <sys/wait.h>
 #include <csignal>
@@ -262,6 +263,35 @@ void ordering_and_insolvency()
         near(r.WALLET_VAL_USDT, op < 100 ? 1200 : 800);
     }
 }
+void shared_strategy_models()
+{
+    // With EMA(2) and 3-candle Bollinger bands, close 110 breaks the upper
+    // band at index 3; close 90 breaks the lower at index 5. Orders follow at 4/6.
+    auto d = market({{100, 101, 99, 100},
+                     {100, 101, 98, 99},
+                     {99, 101, 98, 100},
+                     {100, 111, 99, 110},
+                     {112, 113, 99, 100},
+                     {100, 101, 89, 90},
+                     {88, 89, 84, 85},
+                     {85, 86, 84, 85}});
+    strategy_runner::init_talib();
+    for (bool futures : {false, true})
+    {
+        std::vector<IndicatorCache> cache(1);
+        auto r = strategies::BBTrend{futures}(d, cache, {2, 3, 1, 1}, {0, 8}, true);
+        require(r.fills.size() == (futures ? 4 : 2), "Shared model keeps spot long-only and enables futures shorts");
+        require(r.fills[0].timestamp == d.start + 4 * 60, "Upper-band signal uses the next opening");
+        near(r.fills[0].price, 112);
+        if (futures)
+        {
+            require(r.fills[2].quantity < 0 && r.fills[2].timestamp == d.start + 6 * 60,
+                    "Lower-band break opens a short");
+            near(r.fills[2].price, 88);
+        }
+    }
+    TA_Shutdown();
+}
 void causality_and_holdout()
 {
     std::vector<std::array<float, 4>> candles;
@@ -398,6 +428,7 @@ int main()
         trailing_and_timeouts();
         funding_and_drawdown();
         ordering_and_insolvency();
+        shared_strategy_models();
         causality_and_holdout();
         input_and_readiness();
         std::cout << "Execution checks passed: " << checks << "\n";

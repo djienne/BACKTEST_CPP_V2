@@ -9,6 +9,8 @@ import tempfile
 import unittest
 from unittest.mock import patch
 import zipfile
+import sys
+sys.path.insert(0,str(Path(__file__).resolve().parents[1]/"tools"))
 import download_data as d
 
 BASE = 1704067200000

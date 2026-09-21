@@ -8,10 +8,10 @@
 #include <string>
 #include <vector>
 
-#include "custom_talib_wrapper.hh"
-#include "strategy_runner.hh"
-#include "tools.hh"
-#include "trade_core.hh"
+#include "engine/indicators.hh"
+#include "engine/strategy_runner.hh"
+#include "engine/tools.hh"
+#include "engine/trade_core.hh"
 #include <ta-lib/ta_libc.h>
 
 namespace

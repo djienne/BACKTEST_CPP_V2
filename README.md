@@ -5,6 +5,18 @@ Thirteen strategy programs share one data loader, indicator cache, search runner
 and OHLC execution model. Results describe this model; they are not live-trading
 performance estimates.
 
+## Source layout
+
+- `engine/`: shared execution, accounting, data loading, indicators, configuration and search.
+- `strategies/`: executable entry points and strategy definitions. Spot/futures pairs share
+  one model header; their different grids, thresholds and equality rules remain explicit.
+- `tests/`: C++ behavioral checks, loader/strategy drivers and Python tests.
+- `tools/`: data download/repair and the production smoke runner.
+- `python/`: the independent EMA reference and its optional Numba compilation.
+
+Build commands and configuration stay at the root. Executable names and their
+`build/<mode>/` paths are unchanged by the source organization.
+
 ## Build and check
 
 Docker Compose is the supported build and verification environment on Windows
@@ -92,7 +104,8 @@ coverage and fail on holes without downloading.
 
 Timeframes come from configuration; higher timeframes must be larger integral
 multiples. Strategy parameter ranges and eligibility filters remain next to
-their signal definitions in each source file. A short study may have no
+their signal definitions in `strategies/`. The four paired families use
+`big_will.hh`, `bbtrend.hh`, `ema3_srsi_atr.hh` and `super_reversal.hh`. A short study may have no
 candidate meeting its minimum trades, gain, or drawdown requirement.
 
 ## Data and automatic repair

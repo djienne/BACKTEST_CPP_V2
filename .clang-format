@@ -16,4 +16,5 @@ PointerAlignment: Right
 SpaceAfterTemplateKeyword: true
 Cpp11BracedListStyle: true
 AllowShortLambdasOnASingleLine: None
-LambdaBodyIndentation: OuterScope
+LambdaBodyIndentation: Signature
+AlignAfterOpenBracket: DontAlign

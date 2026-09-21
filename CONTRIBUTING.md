@@ -8,14 +8,21 @@ frameworks or dependencies unless a concrete research need requires them.
 
 | File | Responsibility |
 |---|---|
-| Strategy .cpp files | Parameter ranges, indicator choices, completed-bar signals, eligibility |
-| strategy_runner.hh | Deterministic candidate selection, worker-local caches, chronological holdout, result records |
-| trade_core.hh / .cpp | Orders, protection, fees, funding, equity and metrics |
-| indicators.cpp / .hh | Indicator definitions, readiness, UTC resampling and projection |
-| data_io.cpp / .hh | Strict loading, common timestamp interval, data preparation launch |
+| strategies/*.cpp and *.hh | Entry points and strategy models: grids, indicators, signals and eligibility |
+| engine/strategy_runner.hh | Deterministic candidate selection, worker-local caches, chronological holdout, result records |
+| engine/trade_core.hh / .cpp | Orders, protection, fees, funding, equity and metrics |
+| engine/indicators.cpp / .hh | Indicator definitions, readiness, UTC resampling and projection |
+| engine/data_io.cpp / .hh | Strict loading, common timestamp interval, data preparation launch |
 | tools/download_data.py | Source fetching, gap repair, funding coverage and atomic data writes |
-| config.cpp / .hh | Shared configuration validation |
-| tools.cpp / .hh | Small shared numeric/calendar helpers and result types |
+| engine/config.cpp / .hh | Shared configuration validation |
+| engine/tools.cpp / .hh | Small shared numeric/calendar helpers and result types |
+
+Each .cpp in `strategies/` or `tests/` builds an executable and defines its own
+main function; shared definitions belong in the engine or a strategy header.
+Engine code has no dependency on strategy definitions. Reuse the shared family
+headers for spot/futures variants; do not duplicate their indicator preparation
+or execution loops. Keep genuine model differences explicit. Tests include normal
+strategy headers, never an executable .cpp with its main function renamed.
 
 A strategy returns an `Intent` for a completed signal candle. It does not write
 its own portfolio loop. Compute indicators outside the candle loop and use
@@ -41,17 +48,17 @@ measure of model validity.
 
 Current checks include:
 
-- `tests.cpp`: analytic indicator cases, unit conventions, calendar boundaries,
+- `tests/tests.cpp`: analytic indicator cases, unit conventions, calendar boundaries,
   portfolio arithmetic, resampling alignment and higher-candle availability.
-- `execution_tests.cpp`: the production executor with hand-calculated long and
+- `tests/execution_tests.cpp`: the production executor with hand-calculated long and
   short accounts, fee-losing winners, stops, targets, gaps, trailing timing,
   funding order and marks, open-equity drawdown, insolvency, pair allocation,
-  worker determinism and holdout isolation.
-- `tools/test_download_data.py`: actual repair/merge/write logic with substituted
+  worker determinism, holdout isolation and the shared spot/futures Bollinger model.
+- `tests/test_download_data.py`: actual repair/merge/write logic with substituted
   upstream transport, including unavailable holes, corrupt ZIPs, conflicting
   candles, missing funding and interruption-safe writes. A repaired CSV is
   consumed by the real C++ loader.
-- `tools/test_strategy_reference.py`: the production EMA evaluator against an
+- `tests/test_strategy_reference.py`: the production EMA evaluator against an
   independently written Python ledger, comparing individual fills, equity and
   metrics. Numba parity checks compilation of that same reference; it is not
   separate scientific evidence.
@@ -74,7 +81,7 @@ TA-Lib is an external, uninstrumented library; sanitizer coverage is principally
 the project code.
 
 Use the checked-in clang-format style on files you change. `make format`
-formats all root C++ sources and headers and is broader than most fixes need.
+formats C++ sources/headers in `engine/`, `strategies/` and `tests/` and is broader than most fixes need.
 Run it through Compose when that scope is intentional.
 
 Keep README commands, configuration examples, comments and docstrings aligned
